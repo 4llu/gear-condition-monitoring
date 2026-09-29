@@ -1,12 +1,12 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, reduce
+from torch import nn
 
 
 class Prototypical(nn.Module):
     def __init__(self, backbone, config):
-        super(Prototypical, self).__init__()
+        super().__init__()
         self.config = config
         self.backbone = backbone
         self.eps = torch.finfo(torch.float32).eps
@@ -45,7 +45,7 @@ class Prototypical(nn.Module):
 
         # Separate supports
         # (n_way, k_shot, embedding_len)
-        supports = x[:, : self.config[f"k_shot"], :]
+        supports = x[:, : self.config["k_shot"], :]
         # Average over k_shot
         prototypes = reduce(supports, "w k e -> w e", "mean")
 
@@ -54,7 +54,7 @@ class Prototypical(nn.Module):
 
         # Separate queries
         # (n_way, n_query, embedding_len)
-        queries = x[:, self.config[f"k_shot"] :, :]
+        queries = x[:, self.config["k_shot"] :, :]
         # Flatten
         queries = rearrange(queries, "w q e -> (w q) e")
 
@@ -82,7 +82,9 @@ class Prototypical(nn.Module):
             # = (n_way * n_query, k_shot, embedding_len)
             distances = queries.unsqueeze(1) - prototypes.unsqueeze(0)
             # Euclidean distance
-            distances = torch.sum(distances * distances, dim=-1).sqrt()
+            distances = (
+                torch.sum(distances * distances, dim=-1).clamp(min=self.eps).sqrt()
+            )
             # Flip to get similarity
             similarities = -1 * distances
 

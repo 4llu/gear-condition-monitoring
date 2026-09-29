@@ -1,22 +1,17 @@
 #? Creation
 name: FINAL
-log: false
+log: true
 save: true
 
 #? Validation and testing
-# validation_interval: 50 # * In batches
-validation_interval: 100
-# validation_batches: 100
-validation_batches: 10 # XXX
-# test_interval: 50 # * In batches
+validation_interval: 100 # * In batches
+validation_batches: 10
 test_interval: 100
-# test_batches: 100
-test_batches: 10 # XXX
-# test_extra_logging_interval: 250
+test_batches: 10
 test_extra_logging_interval: 0
 
 #? Datasets
-train_datasets: [ALL_A]
+train_datasets: [ALL_MA]
 validation_datasets: [UNSW]
 test_datasets: [ALL_U]
 
@@ -67,28 +62,28 @@ ALL_test_num_installations: 2
 #* UNSW [ALL]
 ##
 
-UNSW_train_OT_method: nico # YYY
-# UNSW_train_OT_method: signal # XXX: use this instead of Nico
+UNSW_train_OT_method: signal
+# UNSW_train_OT_method: nico # XXX
 UNSW_train_TSA_size: 40
 
-# UNSW_train_speeds: [5, 10, 15, 20]
-UNSW_train_speeds: [5, 15, 20] # XXX
-UNSW_train_loads: [5, 10, 15, 20] # XXX: Added 20
-# UNSW_train_loads: [5, 10] # XXX: removed 20
+UNSW_train_speeds: [5, 10, 15, 20]
+# UNSW_train_speeds: [5, 15, 20] # FIXME
+UNSW_train_loads: [5, 10, 15, 20]
+# UNSW_train_loads: [5, 10] # FIXME
 UNSW_train_classes: [healthy, crack]
-UNSW_train_severities: [H, S, M, L] # * Needs both H & S
+UNSW_train_severities: [H, S, M, L]
 
 #* UNSW [ALL] (TEST)
 ##
 
-# UNSW_train_OT_method: nico
-UNSW_test_OT_method: signal # XXX: use this instead of Nico
+UNSW_test_OT_method: signal
+# UNSW_test_OT_method: nico # XXX
 UNSW_test_TSA_size: 40
 
 UNSW_test_speeds: [5, 10, 15, 20]
-UNSW_test_loads: [5, 10, 15, 20] # XXX: Add 20
+UNSW_test_loads: [5, 10, 15, 20]
 UNSW_test_classes: [healthy, crack]
-UNSW_test_severities: [H, S, M, L] # * Needs both H & S
+UNSW_test_severities: [H, S, M, L]
 
 #* MCC5-THU [ALL]
 ##
@@ -123,11 +118,11 @@ AGFD_train_OT_method: signal
 AGFD_train_TSA_size: 40
 
 AGFD_train_sensors: [acc4]
-AGFD_train_speeds: [500, 750, 1000, 1250, 1500] # Skip 250 # XXX: Add 1500
-AGFD_train_loads: [1, 6, 11] # XXX: Add 6
+AGFD_train_speeds: [500, 750, 1000, 1250, 1500]
+# AGFD_train_speeds: [500, 750, 1000, 1250] # FIXME
+AGFD_train_loads: [1, 6, 11]
 AGFD_train_installations: [1, 2, 3]
-AGFD_train_healthy_GPs: [2, 3, 4, 5, 6, 9] # 1 & 7 not good, 8 doesn't exist # XXX: Drop 2 and 6
-# AGFD_train_healthy_GPs: [2, 3, 4, 5, 6, 9] # 1 & 7 not good, 8 doesn't exist
+AGFD_train_healthy_GPs: [2, 3, 4, 5, 6, 9] # 1 & 7 not good, 8 doesn't exist # XXX: Drop 2 and 6?
 AGFD_train_classes: [healthy, crack, wear]
 AGFD_train_severities: [S, L]
 AGFD_train_include_large_crack: false
@@ -143,8 +138,7 @@ AGFD_test_sensors: [acc4]
 AGFD_test_speeds: [500, 750, 1000, 1250, 1500] # Skip 250 # XXX: ADd 1500
 AGFD_test_loads: [1, 6, 11]
 AGFD_test_installations: [1, 2, 3]
-AGFD_test_healthy_GPs: [2, 3, 4, 5, 6, 9] # 1 & 7 not good, 8 doesn't exist # XXX: Drop 2 and 6
-# AGFD_test_healthy_GPs: [2, 3, 4, 5, 6, 9] # 1 & 7 not good, 8 doesn't exist
+AGFD_test_healthy_GPs: [2, 3, 4, 5, 6, 9]
 AGFD_test_classes: [healthy, crack, wear]
 AGFD_test_severities: [S, L]
 AGFD_test_include_large_crack: false
@@ -289,5 +283,5 @@ gradient_clip: 0 # XXX
 
 # Regularization
 weight_decay: 0.0001
-dropout: 0.1
+dropout: 0.5
 # dropout: 0.3

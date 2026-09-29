@@ -46,7 +46,13 @@ class autoclip_gradient:
 
 
 def run_single_training(
-    train_loaders, validation_loader, test_loader, config, device, trial=None
+    train_loaders,
+    validation_loader,
+    test_loader,
+    config,
+    device,
+    trial=None,
+    model_weight_dir=None,
 ):
     run_start_time = datetime.now().strftime("%m-%d_%H-%M-%S")
 
@@ -164,7 +170,10 @@ def run_single_training(
     patience_counter = 0
 
     # TODO: Model weight saving
-    model_weight_dir = Path(__file__).resolve().parent.parent.parent / "model_weights"
+    if model_weight_dir is None:
+        model_weight_dir = (
+            Path(__file__).resolve().parent.parent.parent / "model_weights"
+        )
     model_weight_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_i = 0
 
@@ -518,102 +527,6 @@ def run_single_training(
                     "test/precision_at_1", test_precision_at_1, batch_i
                 )
                 TB_writer.add_scalar("test/r_precision", test_r_precision, batch_i)
-
-                # ##
-                # # Visualizations and other extra logging
-                # ##
-                # # Don't run if test_extra_logging_interval == 0
-                # if config["test_extra_logging_interval"] > 0 and (
-                #     batch_i % config["test_extra_logging_interval"] == 0
-                #     or batch_i == config["max_batches"] - 1
-                # ):
-                #     ##
-                #     # Visualize predictions and real labels
-                #     ##
-
-                #     fig, axes = plt.subplots(3, 4, figsize=(10, 6), dpi=100)
-                #     axes = axes.flatten()
-
-                #     # Get a batch of test data and predictions
-                #     samples, actual_labels = next(test_loader)
-                #     with torch.no_grad():
-                #         predictions = model(samples.to(device)).cpu()
-
-                #     # Create visualizations for up to 12 samples
-                #     for i, ax in enumerate(axes):
-                #         if i >= len(samples):
-                #             ax.axis("off")
-                #             continue
-
-                #         # Plot sample features as bars
-                #         sample_data = samples[i].cpu().numpy()
-                #         ax.bar(range(len(sample_data)), sample_data, color="skyblue")
-
-                #         # Get prediction info
-                #         pred_value = predictions[i].item()
-                #         pred_confidence = max(pred_value, 1 - pred_value)
-                #         actual_value = actual_labels[i].item()
-                #         is_correct = round(pred_value) == actual_value
-
-                #         # Style the plot
-                #         # FIXME: Not very pretty
-                #         reverse_class_map = {
-                #             v: k for k, v in config["class_map"].items()
-                #         }
-                #         ax.set_title(
-                #             f"Pred: {reverse_class_map[round(pred_value)]}, {pred_confidence*100:.2f}%\nReal: {config['class_mapping'][round(actual_value)]}",
-                #             color="green" if is_correct else "red",
-                #         )
-
-                #         # Add grid for better readability
-                #         ax.grid(True, linestyle="--", alpha=0.7)
-
-                #     plt.tight_layout()
-
-                #     # Convert to tensor and add to TensorBoard
-                #     img_tensor = fig_to_tensor(fig)
-                #     TB_writer.add_image(
-                #         f"predictions_vs_actuals/batch", img_tensor, batch_i
-                #     )
-                #     # TB_writer.add_image(f"predictions_vs_actuals/batch_{batch}", img_tensor, batch)
-                #     plt.close(fig)
-
-                #     ##
-                #     # Add trained feature maps to TensorBoard
-                #     ##
-
-                #     model_embeddings = []
-                #     model_labels = []
-                #     with torch.no_grad():
-                #         sample_stack = []
-
-                #         # Collect multiple batches into one (very slight performance improvement)
-                #         for embedding_batch in range(50):
-                #             samples, batch_labels = next(train_loader)
-                #             sample_stack.extend(samples)
-                #             model_labels.append(
-                #                 torch.round(batch_labels).to(torch.int32)
-                #             )
-
-                #             # Modify this if too big for memory
-                #             if (embedding_batch + 1) % 50 == 0:
-                #                 # Don't need the output, just the penultimate features
-                #                 _ = model(torch.stack(sample_stack))
-                #                 model_embeddings.append(model.penultimate_features)
-                #                 sample_stack = []
-
-                #     model_embeddings = (
-                #         torch.cat(model_embeddings, dim=0).cpu().detach().numpy()
-                #     )
-                #     model_labels = torch.cat(model_labels, dim=0).cpu().detach().numpy()
-
-                #     # Add embeddings to Tensorboard
-                #     TB_writer.add_embedding(
-                #         model_embeddings,
-                #         metadata=model_labels,
-                #         tag=f"embeddings",
-                #         global_step=batch_i,
-                #     )
 
     # Ensure tensorboard is closed correctly
     if TB_writer:

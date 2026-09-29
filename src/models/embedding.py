@@ -1,15 +1,15 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, reduce
-from pytorch_metric_learning import distances, losses, miners, reducers
+from pytorch_metric_learning import distances, losses, miners
+from torch import nn
 
 from src.training.utils import fix_embedding_labels
 
 
 class Embedding(nn.Module):
     def __init__(self, backbone, config, device):
-        super(Embedding, self).__init__()
+        super().__init__()
         self.backbone = backbone
         self.config = config
         self.device = device
@@ -19,6 +19,7 @@ class Embedding(nn.Module):
 
         self.miner = None
         self.loss_fn = None
+        self.eps = torch.finfo(torch.float32).eps
 
         # Similarity metric
         if self.config["loss"] in ["contrastive", "triplet", "supcon"]:
@@ -176,7 +177,9 @@ class Embedding(nn.Module):
             # Each query to each prototype
             distances = queries.unsqueeze(1) - prototypes.unsqueeze(0)
             # ((n_way * n_query), n_way)
-            distances = torch.sum(distances * distances, dim=-1).sqrt()
+            distances = (
+                torch.sum(distances * distances, dim=-1).clamp(min=self.eps).sqrt()
+            )
 
             # y_pred = torch.argmin(distances, dim=-1)
             return -1 * distances
