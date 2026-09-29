@@ -1,0 +1,7 @@
+.DS_STore
+**/__pycache__/
+
+data/*
+data/processed/*
+logs/
+model_weights/*

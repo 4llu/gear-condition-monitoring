@@ -597,14 +597,15 @@ class BatchPreprocessor:
         self.split = split
         self.rng = rng
 
-    def transform(self, samples):
-        for func_name in self.config["preprocessing_individual"]:
+    def transform(self, batch):
+        for func_name in self.config[self.stage]:
             func = globals().get(func_name)
-            if not callable(func):
+            if callable(func):
+                batch = func(batch, self.config, self.split, self.rng)
+            else:
                 raise ValueError(  # noqa: TRY004
-                    f"Unknown individual preprocessing step '{func_name}' in "
-                    f"config['preprocessing_individual']!"
+                    f"Unknown batch preprocessing step '{func_name}' in "
+                    f"config['{self.stage}']!"
                 )
-            samples = func(samples, self.config_prefix, self.config)
 
-        return samples
+        return batch

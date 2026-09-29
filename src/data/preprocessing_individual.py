@@ -89,5 +89,10 @@ class IndividualPreprocessor:
             func = globals().get(func_name)
             if callable(func):
                 samples = func(samples, self.config_prefix, self.config)
+            else:
+                raise ValueError(  # noqa: TRY004
+                    f"Unknown batch preprocessing step '{func_name}' in "
+                    f"config['{self.stage}']!"
+                )
 
         return samples

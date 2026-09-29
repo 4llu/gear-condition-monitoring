@@ -473,7 +473,7 @@ def get_UNSW_data(split, rng, config, device):
         data_path = (
             Path(__file__).resolve().parent.parent.parent
             / "data"
-            / "UNSW_gear_crack_OT.feather"
+            / "UNSW_gear_crack_OT_V2.feather"
             # / "UNSW_gear_crack_OT_TSA_FFT_V2.feather"
         )
         dfs.append(pd.read_feather(data_path))
