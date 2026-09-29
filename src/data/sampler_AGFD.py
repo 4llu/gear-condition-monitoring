@@ -29,12 +29,12 @@ class AGFD_Dataset(Dataset):
             # "wear": lambda: "L",
             # "crack": lambda: "S",
             "wear": lambda: (
-                np.random.choice(["L", "S"])
+                self.rng.choice(["L", "S"])
                 if self.config[f"{config_prefix}include_small_wear"]
                 else "L"
             ),
             "crack": lambda: (
-                np.random.choice(["L", "S"])
+                self.rng.choice(["L", "S"])
                 if self.config[f"{config_prefix}include_large_crack"]
                 else "S"
             ),
@@ -100,10 +100,10 @@ class AGFD_Dataset(Dataset):
         # Get the number of operating conditions for each class
         for fault_class in self.config[f"{config_prefix}classes"]:
             num_operating_conditions = sum(
-                1 for key in self.data.keys() if key[0] == fault_class
+                1 for key in self.data if key[0] == fault_class
             )
             num_samples = sum(
-                len(self.data[key]) for key in self.data.keys() if key[0] == fault_class
+                len(self.data[key]) for key in self.data if key[0] == fault_class
             )
 
             log.debug(
@@ -112,7 +112,7 @@ class AGFD_Dataset(Dataset):
 
         # Skip for non-episodic batches
         if self.config["episodic_training"]:
-            for k in self.data.keys():
+            for k in self.data:
                 assert len(self.data[k]) >= self.config["n_query"], (
                     f"Not enough samples for the query set for dataset {self.config_prefix} idx {k}."
                 )
@@ -228,7 +228,7 @@ class AGFD_FS_Difference_BatchSampler(BatchSampler):
         self.config = config
         self.fault_classes = self.config[f"{self.dataset.config_prefix}classes"][
             1:
-        ]  #! "healthy" must be first
+        ]  # ! "healthy" must be first
         self.batch_num = 0  # Batch num
         self.prev_batch = None
 
@@ -242,11 +242,11 @@ class AGFD_FS_Difference_BatchSampler(BatchSampler):
         # Keep - (speed, load, installation, OT_method, TSA_size, sensor)
         operating_conditions = [
             (k[1], k[2], k[4], k[6], k[7], k[8])
-            for k in self.dataset.data.keys()
+            for k in self.dataset.data
             if k[0] != "healthy"
         ]
-        # Keep only unique
-        self.operating_conditions = list(set(operating_conditions))
+        # Keep only unique (sorted, as set order changes between processes)
+        self.operating_conditions = sorted(set(operating_conditions))
         # Get permutated order
         self.operating_conditions_order = self.rng.permutation(
             len(self.operating_conditions)
@@ -317,9 +317,9 @@ class AGFD_FS_Difference_BatchSampler(BatchSampler):
 
                 query_load = self.rng.choice(
                     # Remove current load from the list
-                    list(
+                    sorted(
                         set(self.config[f"{self.dataset.config_prefix}loads"])
-                        - set([base[1]])
+                        - {base[1]}
                     ),
                     size=1,
                     replace=False,
@@ -334,13 +334,13 @@ class AGFD_FS_Difference_BatchSampler(BatchSampler):
                 # Remove base installation from the list
                 available_installations = set(
                     self.config[f"{self.dataset.config_prefix}installations"]
-                ) - set([base[2]])
+                ) - {base[2]}
 
                 # Remove installation 3 if using acc2
                 # NOTE: This is because acc3 for installation 3 is broken
                 if base[5] == "acc2":
-                    available_installations = available_installations - set([3])
-                available_installations = list(available_installations)
+                    available_installations = available_installations - {3}
+                available_installations = sorted(available_installations)
 
                 # Sample random installation for faulty query
                 # Support installation is always the same as base
@@ -524,24 +524,20 @@ def get_AGFD_data(split, rng, config, device):
     data = None
     # Hardcoded because of file names
     if config[f"{config_prefix}TSA_size"] == 40:
-        data_path = (
-            Path(__file__).resolve().parent.parent.parent / "data" / "AGFD_OT.feather"
-        )
-        # dfs.append(pd.read_feather(data_path))
         data = pd.read_feather(
             Path(__file__).resolve().parent.parent.parent
             / "data"
             / "AGFD_OT_V2.feather"
         )
     if config[f"{config_prefix}TSA_size"] == 15:
-        raise Exception("Probably shouldn't use this right now!")
-        data_path = (
-            Path(__file__).resolve().parent.parent.parent
-            / "data"
-            / "AGFD_OT_TSA_15.feather"
-            # / "AGFD_OT_V2_TSA_15.feather"
-        )
-        dfs.append(pd.read_feather(data_path))
+        raise Exception("Probably shouldn't use this right now!")  # noqa: TRY002
+        # data_path = (
+        #     Path(__file__).resolve().parent.parent.parent
+        #     / "data"
+        #     / "AGFD_OT_TSA_15.feather"
+        #     # / "AGFD_OT_V2_TSA_15.feather"
+        # )
+        # dfs.append(pd.read_feather(data_path))
 
     # data = pd.concat(dfs, ignore_index=True)
 

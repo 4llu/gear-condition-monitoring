@@ -4,7 +4,7 @@ from pprint import pformat
 
 from src.data.data import setup_data
 from src.training.training import run_single_training
-from src.utils.init import setup_config, setup_device
+from src.utils.init import resolve_seed, seed_everything, setup_config, setup_device
 from src.utils.logging import setup_logging
 
 MODEL_WEIGHT_DIR = Path(__file__).resolve().parent / "model_weights"
@@ -53,6 +53,15 @@ def parse_args():
     parser.add_argument(
         "--runs", type=int, default=5, help="Number of training runs (default: 5)."
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "Base seed, run i uses seed + i. Overrides the config's seed. "
+            "If neither is set, a random base seed is used."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -69,22 +78,34 @@ def main():
         config["save"] = True
 
     output_dir = get_output_dir(get_dataset_code(config["train_datasets"]))
+    base_seed = resolve_seed(
+        args.seed if args.seed is not None else config.get("seed")
+    )
 
     log.info("")
     log.info("##")
     log.info(f"# REPEATED RUNS: {config['name']} - {config['model']} x {args.runs}")
     log.info(f"# Saving weights to: {output_dir}")
+    log.info(f"# Base seed: {base_seed}")
     log.info("##")
     log.info("")
     log.info(pformat(config, width=1, sort_dicts=False))
 
     for run_i in range(args.runs):
         log.info("")
-        log.info(f"# RUN {run_i + 1}/{args.runs}")
+        # Different but reproducible seed for every ensemble member
+        # * Stored in the config, so it is saved in the run's run_info.yaml
+        seed = base_seed + run_i
+        config["seed"] = seed
+        seed_everything(seed)
+
+        log.info(f"# RUN {run_i + 1}/{args.runs} (seed {seed})")
         log.info("")
 
         # Fresh data loaders for every run
-        train_loaders, validation_loader, test_loader = setup_data(config, device)
+        train_loaders, validation_loader, test_loader = setup_data(
+            config, device, seed=seed
+        )
 
         run_single_training(
             train_loaders,

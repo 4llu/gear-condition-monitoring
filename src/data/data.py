@@ -115,11 +115,12 @@ def get_dataloader(name, split, rng, config, device):
         raise Exception(s)
 
 
-def setup_data(config, device):
+def setup_data(config, device, seed=None):
     log.debug("")
     log.debug("PREPARING DATA")
 
-    rng = np.random.default_rng()
+    # Every sampler and augmentation draws from this generator
+    rng = np.random.default_rng(seed)
 
     train_loaders = []
     validation_loaders = []

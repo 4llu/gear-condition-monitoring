@@ -9,11 +9,12 @@ By: *Aleksanteri Hämäläinen* (aleksanteri.hamalainen@aalto.fi)
 `train_repeated.py` trains a model several times with the same config, so the runs can be tested together as an ensemble.
 
 ```
-python train_repeated.py <config> [--runs N]
+python train_repeated.py <config> [--runs N] [--seed SEED]
 ```
 
 - `config`: config name in `configs/`, without `.yaml` (e.g. `FINAL`).
 - `--runs`: number of training runs (default: 5, matching `ENSEMBLE_SIZE` in `test.py`).
+- `--seed`: base seed. Run *i* uses `SEED + i`, so the ensemble members differ but the whole ensemble is reproducible. Overrides the config's `seed`; if neither is set, a random base seed is picked and logged.
 
 All runs are saved to `model_weights/<datasets>`, named after the config's `train_datasets` with one letter per dataset in the order U (UNSW), M (MCC5), A (AGFD), S (ASD). For example, `[ALL_A]` gives `A`, `[ALL_UM]` gives `UM` and `[ALL_AM]` gives `MA`. If that directory already exists, the first free one of `<datasets>_1`, `<datasets>_2`, ... is used instead (e.g. `A_1`), so every invocation gets its own directory. Each run gets its own timestamped subdirectory inside it. If the config has `save: false`, it is overridden to `true`.
 
@@ -31,11 +32,27 @@ Train 10 models with the `FINAL` config:
 python train_repeated.py FINAL --runs 10
 ```
 
+Train a reproducible ensemble of 5 models with seeds 42–46:
+
+```bash
+python train_repeated.py FINAL --seed 42
+```
+
 Test the resulting ensemble (here `FINAL` trains on `ALL_A`, so the weights are in `model_weights/A`):
 
 ```bash
 python test.py A UNSW
 ```
+
+### Reproducing a run
+
+Every run folder contains a `run_info.yaml` next to its checkpoints, with the run's `seed`, the git commit (and whether the working tree had uncommitted changes), and the full config used. To reproduce a run, check out that commit, make sure the config matches the saved one, and train with the same seed:
+
+```bash
+python main.py --config FINAL --seed 42
+```
+
+Single runs with `main.py` take the seed the same way: `--seed` first, then `seed` in the config, otherwise a random seed that is still saved in `run_info.yaml`. Runs are only bit-for-bit reproducible on the CPU; MPS and CUDA don't guarantee it.
 
 ### Testing a trained ensemble (`test.py`)
 

@@ -1,12 +1,13 @@
 import logging
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pytorch_warmup as warmup
 import torch
 from pytorch_metric_learning.utils.accuracy_calculator import AccuracyCalculator
+from ruamel.yaml import YAML
 from torch.utils.tensorboard import SummaryWriter
 from zclip import ZClip
 
@@ -41,6 +42,42 @@ class autoclip_gradient:
         torch.nn.utils.clip_grad_norm_(model.parameters(), clip_value)
 
 
+def _get_git_state():
+    repo_dir = Path(__file__).resolve().parent.parent.parent
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return {"commit": None, "dirty": None}
+    return {"commit": commit, "dirty": dirty}
+
+
+def _save_run_info(run_dir, config):
+    """Store everything needed to reproduce the run next to its weights."""
+    run_info = {
+        "seed": config.get("seed"),
+        "git": _get_git_state(),
+        "config": config,
+    }
+    yaml = YAML()
+    with open(run_dir / "run_info.yaml", "w") as stream:
+        yaml.dump(run_info, stream)
+
+
 # MAIN TRAINING FUNCTION
 ########################
 
@@ -54,7 +91,7 @@ def run_single_training(
     trial=None,
     model_weight_dir=None,
 ):
-    run_start_time = datetime.now().strftime("%m-%d_%H-%M-%S")
+    run_start_time = datetime.now().strftime("%m-%d_%H-%M-%S")  # noqa: DTZ005
 
     # Use if debugging NaN errors
     # NOTE: This is a bit slow, so only use if necessary
@@ -166,15 +203,16 @@ def run_single_training(
     best_test_accuracy = 0.0
     running_test_accuracy = []
 
-    # TODO: Implement early stopping
-    patience_counter = 0
-
     # TODO: Model weight saving
     if model_weight_dir is None:
         model_weight_dir = (
             Path(__file__).resolve().parent.parent.parent / "model_weights"
         )
     model_weight_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = model_weight_dir / run_start_time
+    if config["save"]:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        _save_run_info(run_dir, config)
     checkpoint_i = 0
 
     # TRAINING LOOP
@@ -285,11 +323,9 @@ def run_single_training(
                 #         )
 
         if config["save"] and batch_i % 100 == 0:
-            run_dir = model_weight_dir / run_start_time
-            run_dir.mkdir(parents=True, exist_ok=True)
             torch.save(
                 model.backbone.state_dict(),
-                model_weight_dir / run_dir / f"{checkpoint_i}.pth",
+                run_dir / f"{checkpoint_i}.pth",
             )
             checkpoint_i += 1
 
@@ -362,7 +398,7 @@ def run_single_training(
 
             # Save best
             if val_accuracy > best_val_accuracy:
-                best_val_loss = val_loss
+                # best_val_loss = val_loss
                 best_val_accuracy = val_accuracy
                 best_epoch = batch_i
 

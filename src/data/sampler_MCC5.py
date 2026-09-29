@@ -50,18 +50,17 @@ class MCC5_Dataset(Dataset):
 
         # Group data by operating conditions and make into a dictionary
         self.data = (
-            self.data.groupby(
-                [
-                    "class",
-                    "speed",
-                    "load",
-                    "severity",
-                    "circulation",
-                    "OT_method",
-                    "TSA_size",
-                    "sensor",
-                ]
-            )["signal"]
+            self.data
+            .groupby([
+                "class",
+                "speed",
+                "load",
+                "severity",
+                "circulation",
+                "OT_method",
+                "TSA_size",
+                "sensor",
+            ])["signal"]
             .apply(list)
             .to_dict()
         )
@@ -69,10 +68,10 @@ class MCC5_Dataset(Dataset):
         # Get the number of operating conditions for each class
         for fault_class in self.config[f"{config_prefix}classes"]:
             num_operating_conditions = sum(
-                1 for key in self.data.keys() if key[0] == fault_class
+                1 for key in self.data if key[0] == fault_class
             )
             num_samples = sum(
-                len(self.data[key]) for key in self.data.keys() if key[0] == fault_class
+                len(self.data[key]) for key in self.data if key[0] == fault_class
             )
 
             log.debug(
@@ -81,10 +80,10 @@ class MCC5_Dataset(Dataset):
 
         # Skip for non-episodic batches
         if self.config["episodic_training"]:
-            for k in self.data.keys():
-                assert (
-                    len(self.data[k]) >= self.config["n_query"]
-                ), f"Not enough samples ({len(self.data[k])}) for the query set for dataset {self.config_prefix} idx {k}."
+            for k in self.data:
+                assert len(self.data[k]) >= self.config["n_query"], (
+                    f"Not enough samples ({len(self.data[k])}) for the query set for dataset {self.config_prefix} idx {k}."
+                )
 
     def __len__(self):
         return len(self.data.keys())  # ! FAIRLY MEANINGLESS!!!
@@ -120,7 +119,7 @@ class MCC5_FS_Difference_BatchSampler(BatchSampler):
         self.config = config
         self.fault_classes = self.config[f"{self.dataset.config_prefix}classes"][
             1:
-        ]  #! "healthy" must be first
+        ]  # ! "healthy" must be first
         self.batch_num = 0  # Batch num
         self.prev_batch = None
 
@@ -141,11 +140,11 @@ class MCC5_FS_Difference_BatchSampler(BatchSampler):
         # Keep - (speed, load, severity, circulation, OT_method, TSA_size, sensor)
         operating_conditions = [
             (k[1], k[2], k[3], k[4], k[5], k[6], k[7])
-            for k in self.dataset.data.keys()
+            for k in self.dataset.data
             if k[0] != "healthy"
         ]
-        # Keep only unique
-        self.operating_conditions = list(set(operating_conditions))
+        # Keep only unique (sorted, as set order changes between processes)
+        self.operating_conditions = sorted(set(operating_conditions))
         # Get permutated order
         self.operating_conditions_order = self.rng.permutation(
             len(self.operating_conditions)
@@ -155,14 +154,14 @@ class MCC5_FS_Difference_BatchSampler(BatchSampler):
         ########
 
         if "severity" in self.config[f"{self.dataset.config_prefix}shift_methods"]:
-            assert (
-                len(self.config[f"{self.dataset.config_prefix}severities"]) > 1
-            ), f"MCC5_FS_Difference_BatchSampler requires at least 2 severities to do severity shift ({self.dataset.config_prefix})"
+            assert len(self.config[f"{self.dataset.config_prefix}severities"]) > 1, (
+                f"MCC5_FS_Difference_BatchSampler requires at least 2 severities to do severity shift ({self.dataset.config_prefix})"
+            )
 
         if "load" in self.config[f"{self.dataset.config_prefix}shift_methods"]:
-            assert (
-                len(self.possible_loads_for_shift) >= 2
-            ), f"MCC5_FS_Difference_BatchSampler requires both 10 Nm and 20 Nm loads to do load shift ({self.dataset.config_prefix})"
+            assert len(self.possible_loads_for_shift) >= 2, (
+                f"MCC5_FS_Difference_BatchSampler requires both 10 Nm and 20 Nm loads to do load shift ({self.dataset.config_prefix})"
+            )
 
     def __iter__(self):
         while True:
@@ -206,7 +205,7 @@ class MCC5_FS_Difference_BatchSampler(BatchSampler):
                 # Sample random loads for shift
                 query_load = self.rng.choice(
                     # Remove current load from the list
-                    list(set(self.possible_loads_for_shift) - set([base[1]])),
+                    sorted(set(self.possible_loads_for_shift) - {base[1]}),
                     size=1,
                     # Needs to be true, because if support is 10 or 20, only one choice left,
                     # because 5 and 15 cannot be trusted to exist for all speeds
@@ -220,9 +219,9 @@ class MCC5_FS_Difference_BatchSampler(BatchSampler):
                 # Sample random severity for query
                 # Support severity is always the same as base and anchor not needed
                 query_severity = self.rng.choice(
-                    list(
+                    sorted(
                         set(self.config[f"{self.dataset.config_prefix}severities"])
-                        - set([base[2]])
+                        - {base[2]}
                     ),
                     size=1,
                     replace=False,
@@ -254,67 +253,59 @@ class MCC5_FS_Difference_BatchSampler(BatchSampler):
             # Healthy anchor
             # NOTE: Only use if difference is used
             if self.config["use_difference"]:
-                batch.append(
-                    (
+                batch.append((
+                    "healthy",
+                    base[0],
+                    support_load,
+                    "-",
+                    anchor_circulation,
+                    base[4],
+                    base[5],
+                    base[6],
+                ))
+
+                # If load doesn't change, only one anchor is needed
+                if shift_method == "load" or shift_method == "load_and_severity":
+                    batch.append((
                         "healthy",
                         base[0],
-                        support_load,
+                        query_load,
                         "-",
                         anchor_circulation,
                         base[4],
                         base[5],
                         base[6],
-                    )
-                )
-
-                # If load doesn't change, only one anchor is needed
-                if shift_method == "load" or shift_method == "load_and_severity":
-                    batch.append(
-                        (
-                            "healthy",
-                            base[0],
-                            query_load,
-                            "-",
-                            anchor_circulation,
-                            base[4],
-                            base[5],
-                            base[6],
-                        )
-                    )
+                    ))
 
             # Healthy support
-            batch.extend(
-                [
-                    (
-                        "healthy",
-                        base[0],
-                        support_load,
-                        "-",
-                        healthy_sample_circulation,
-                        base[4],
-                        base[5],
-                        base[6],
-                    )
-                    for _ in range(self.config["k_shot"])
-                ]
-            )
+            batch.extend([
+                (
+                    "healthy",
+                    base[0],
+                    support_load,
+                    "-",
+                    healthy_sample_circulation,
+                    base[4],
+                    base[5],
+                    base[6],
+                )
+                for _ in range(self.config["k_shot"])
+            ])
 
             # Healthy query
-            batch.extend(
-                [
-                    (
-                        "healthy",
-                        base[0],
-                        query_load,
-                        "-",
-                        healthy_sample_circulation,
-                        base[4],
-                        base[5],
-                        base[6],
-                    )
-                    for _ in range(self.config["n_query"])
-                ]
-            )
+            batch.extend([
+                (
+                    "healthy",
+                    base[0],
+                    query_load,
+                    "-",
+                    healthy_sample_circulation,
+                    base[4],
+                    base[5],
+                    base[6],
+                )
+                for _ in range(self.config["n_query"])
+            ])
 
             # OTHER CLASSES
             ##
@@ -337,7 +328,7 @@ class MCC5_FS_Difference_BatchSampler(BatchSampler):
                     base[6],
                 )
                 # Pitting is missing a few measurements for M severity, so use L
-                if support_key not in self.dataset.data.keys():
+                if support_key not in self.dataset.data:
                     support_key = (
                         fault_class,
                         base[0],
@@ -365,7 +356,7 @@ class MCC5_FS_Difference_BatchSampler(BatchSampler):
                     base[6],
                 )
                 # Pitting is missing a few measurements for M severity, so use L
-                if query_key not in self.dataset.data.keys():
+                if query_key not in self.dataset.data:
                     query_key = (
                         fault_class,
                         base[0],
@@ -419,7 +410,7 @@ def get_MCC5_data(split, rng, config, device):
     ###########
 
     log.debug(f"Reading {config_prefix} data")
-    log.debug(f"")
+    log.debug("")
 
     # data_path = (
     #     Path(__file__).resolve().parent.parent.parent / "data" / "MCC5-THU_OT.feather"
@@ -432,16 +423,17 @@ def get_MCC5_data(split, rng, config, device):
         data_path = (
             Path(__file__).resolve().parent.parent.parent
             / "data"
-            / "MCC5-THU_OT.feather"
+            / "MCC5-THU_OT_V3.feather"
         )
         dfs.append(pd.read_feather(data_path))
     if 15 in config[f"{config_prefix}TSA_sizes"]:
-        data_path = (
-            Path(__file__).resolve().parent.parent.parent
-            / "data"
-            / "MCC5-THU_OT_TSA_15.feather"
-        )
-        dfs.append(pd.read_feather(data_path))
+        raise Exception("Probably shouldn't use this right now!")  # noqa: TRY002
+        # data_path = (
+        #     Path(__file__).resolve().parent.parent.parent
+        #     / "data"
+        #     / "MCC5-THU_OT_TSA_15.feather"
+        # )
+        # dfs.append(pd.read_feather(data_path))
     data = pd.concat(dfs, ignore_index=True)
 
     data = data[

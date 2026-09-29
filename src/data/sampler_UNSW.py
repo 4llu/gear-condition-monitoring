@@ -77,10 +77,10 @@ class UNSW_Dataset(Dataset):
         # num_faulty_samples = len(self.data) - num_healthy_samples
         for fault_class in self.config[f"{config_prefix}classes"]:
             num_operating_conditions = sum(
-                1 for key in self.data.keys() if key[0] == fault_class
+                1 for key in self.data if key[0] == fault_class
             )
             num_samples = sum(
-                len(self.data[key]) for key in self.data.keys() if key[0] == fault_class
+                len(self.data[key]) for key in self.data if key[0] == fault_class
             )
 
             log.debug(
@@ -89,8 +89,8 @@ class UNSW_Dataset(Dataset):
 
         # log.debug(f"{self.config_prefix} Num healthy keys {num_healthy_samples}")
         # log.debug(f"{self.config_prefix} Num faulty keys {num_faulty_samples}")
-        for k in self.data.keys():
-            assert len(self.data[k]) >= self.config[f"n_query"], (
+        for k in self.data:
+            assert len(self.data[k]) >= self.config["n_query"], (
                 f"Not enough samples for the query set for dataset {self.config_prefix} idx {k}."
             )
 
@@ -166,7 +166,7 @@ class UNSW_Classical_BatchSampler(BatchSampler):
                     ##
 
                     if class_ == "healthy":
-                        for _ in range(self.config[f"UNSW_train_num_queries"]):
+                        for _ in range(self.config["UNSW_train_num_queries"]):
                             batch.append((
                                 class_,
                                 int(option[0]),  # speed
@@ -182,7 +182,7 @@ class UNSW_Classical_BatchSampler(BatchSampler):
                     # FAULTY
                     ##
                     else:
-                        for _ in range(self.config[f"UNSW_train_num_queries"]):
+                        for _ in range(self.config["UNSW_train_num_queries"]):
                             batch.append((
                                 class_,
                                 int(option[0]),  # speed
@@ -210,7 +210,7 @@ class UNSW_FS_Difference_BatchSampler(BatchSampler):
         self.config = config
         self.fault_classes = self.config[f"{self.dataset.config_prefix}classes"][
             1:
-        ]  #! "healthy" must be first
+        ]  # ! "healthy" must be first
         self.batch_num = 0  # Batch num
         self.prev_batch = None
 
@@ -224,11 +224,11 @@ class UNSW_FS_Difference_BatchSampler(BatchSampler):
         # Keep - (speed, load, severity, OT_method, TSA_size)
         operating_conditions = [
             (k[1], k[2], k[3], k[4], k[5])
-            for k in self.dataset.data.keys()
+            for k in self.dataset.data
             if k[0] != "healthy"
         ]
-        # Keep only unique
-        self.operating_conditions = list(set(operating_conditions))
+        # Keep only unique (sorted, as set order changes between processes)
+        self.operating_conditions = sorted(set(operating_conditions))
         # Get permutated order
         self.operating_conditions_order = self.rng.permutation(
             len(self.operating_conditions)
@@ -295,9 +295,9 @@ class UNSW_FS_Difference_BatchSampler(BatchSampler):
                 # Sample random loads for shift
                 query_load = self.rng.choice(
                     # Remove current load from the list
-                    list(
+                    sorted(
                         set(self.config[f"{self.dataset.config_prefix}loads"])
-                        - set([base[1]])
+                        - {base[1]}
                     ),
                     size=1,
                     replace=False,
@@ -466,7 +466,7 @@ def get_UNSW_data(split, rng, config, device):
     ###########
 
     log.debug(f"Reading {config_prefix} data")
-    log.debug(f"")
+    log.debug("")
 
     dfs = []
     if 40 in config[f"{config_prefix}TSA_sizes"]:
@@ -478,13 +478,14 @@ def get_UNSW_data(split, rng, config, device):
         )
         dfs.append(pd.read_feather(data_path))
     if 15 in config[f"{config_prefix}TSA_sizes"]:
-        data_path = (
-            Path(__file__).resolve().parent.parent.parent
-            / "data"
-            / "UNSW_gear_crack_OT_TSA_15.feather"
-            # / "UNSW_gear_crack_OT_TSA_FFT_V2_TSA_15.feather"
-        )
-        dfs.append(pd.read_feather(data_path))
+        raise Exception("Probably shouldn't use this right now!")  # noqa: TRY002
+        # data_path = (
+        #     Path(__file__).resolve().parent.parent.parent
+        #     / "data"
+        #     / "UNSW_gear_crack_OT_TSA_15.feather"
+        #     # / "UNSW_gear_crack_OT_TSA_FFT_V2_TSA_15.feather"
+        # )
+        # dfs.append(pd.read_feather(data_path))
 
     data = pd.concat(dfs, ignore_index=True)
 

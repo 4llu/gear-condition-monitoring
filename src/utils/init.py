@@ -1,6 +1,8 @@
+import random
 from argparse import ArgumentParser
 from pathlib import Path
 
+import numpy as np
 import torch
 from ruamel.yaml import YAML
 
@@ -13,6 +15,9 @@ def get_arguments():
     # Init arguments
     parser = ArgumentParser()
     parser.add_argument(f"--config", default="base", type=str)
+    parser.add_argument(
+        "--seed", default=None, type=int, help="Overrides the config's seed"
+    )
 
     # Parse args
     args = parser.parse_args()
@@ -43,6 +48,24 @@ def setup_config(config_name, config_override_name=None):
         config.update(config_override)
 
     return dict(config)
+
+
+def resolve_seed(seed=None):
+    """Return the given seed, or a fresh random one if None, so it can always be recorded."""
+    if seed is None:
+        seed = int(np.random.SeedSequence().generate_state(1)[0])
+    return int(seed)
+
+
+def seed_everything(seed):
+    """Seed every random number generator used during training."""
+    random.seed(seed)
+    # Safety net for any code still using the global NumPy RNG
+    np.random.seed(seed)
+    # Model initialization and dropout
+    torch.manual_seed(seed)
+    # Warn instead of failing if an op has no deterministic implementation
+    torch.use_deterministic_algorithms(True, warn_only=True)
 
 
 def setup_device(override=None):

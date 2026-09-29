@@ -60,25 +60,6 @@ def cherry_pick_indices(samples, config_prefix, config):
     ]
 
 
-def harmonic_band(samples, config_prefix, config):
-    assert config[f"{config_prefix}teeth"] % 2 != 0, (
-        "Check if the math checks out of odd number of teeth (also for masking)!"
-    )
-
-    # print(samples.shape)
-    samples = samples[
-        :,
-        config[f"{config_prefix}teeth"]
-        - (config[f"{config_prefix}teeth"] // 2) : config["gear_harmonics_to_include"]
-        * config[f"{config_prefix}teeth"]
-        + config[f"{config_prefix}teeth"] // 2  # Last right side sideband
-        + 1,  # Because DC is skipped
-    ]
-    # print(samples.shape)
-
-    return samples
-
-
 class IndividualPreprocessor:
     def __init__(self, config, dataset_name, split):
         self.config = config

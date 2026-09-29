@@ -2,6 +2,7 @@
 name: FINAL
 log: true
 save: true
+seed: null # * null -> random seed (still saved in run_info.yaml), --seed overrides
 
 #? Validation and testing
 validation_interval: 100 # * In batches

@@ -1,7 +1,3 @@
-import torch
-import numpy as np
-
-
 def fix_embedding_labels(batch_labels, config):
     """
     Pick out batch labels that match the query samples.

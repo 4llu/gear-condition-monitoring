@@ -2,9 +2,7 @@ import logging
 
 import numpy as np
 import torch
-from einops import rearrange, repeat, reduce
-
-from matplotlib import pyplot as plt
+from einops import rearrange, reduce, repeat
 
 log = logging.getLogger("gear-cm")
 
@@ -25,7 +23,7 @@ def collate_all(
     # NOTE: Use AGFD options for both. Installations is severity for MCC5
     config_prefix_AGFD = f"AGFD_{split}_"
     config_prefix_MCC5 = f"MCC5_{split}_"
-    config_prefix_UNSW = f"UNSW_{split}_"
+    # config_prefix_UNSW = f"UNSW_{split}_"
     config_prefix_ALL = f"ALL_{split}_"
 
     assert len(config[f"{config_prefix_AGFD}classes"]) == len(
@@ -298,146 +296,6 @@ def zero_floor(batch, config, split, rng):
     return np.maximum(batch, 0)
 
 
-def mask_blocks(batch, config, split, rng):
-    """
-    Mask blocks of the batch to zero
-    """
-
-    # Skip masking during validation and testing or with 50% chance
-    if split != "train" or rng.choice([True, False], p=[0.5, 0.5]):
-        return batch
-
-    # Choose harmonic
-    block_to_mask = rng.integers(0, config["gear_harmonics_to_include"], 2)[0]
-
-    # Get the block size
-    harmonic_block_size = config["gear_sideband_block_size"] * 4 + 1
-    # Create the mask
-    mask = np.ones_like(batch)
-    mask[
-        :,
-        :,
-        # Mask
-        np.r_[
-            harmonic_block_size * block_to_mask : harmonic_block_size
-            * (block_to_mask + 1)
-        ],
-    ] = 0
-    mask[
-        :,
-        # Only mask half of the support and half of the query
-        # Cannot be done with one indexing
-        np.r_[
-            0 : batch.shape[1] // 4,
-            2 * (batch.shape[1] // 4) : 3 * (batch.shape[1] // 4),
-        ],
-        :,
-    ] = 1
-
-    # Apply the mask
-    return batch * mask
-
-
-def mask_blocks1(batch, config, split, rng):
-    """
-    Mask one harmonic block per sample to zero. Different harmonics for each sample.
-    """
-
-    # Skip masking during validation and testing or with 50% chance
-    if split != "train" or rng.choice([True, False], p=[0.5, 0.5]):
-        return batch
-
-    assert config["k_shot"] == config["n_query"], (
-        "Block masking assumes k_shot == n_query for masking blocks."
-    )
-    assert config["k_shot"] % 2 == 0, (
-        "Block masking assumes k_shot is even for masking blocks."
-    )
-
-    block_to_mask = rng.integers(0, config["gear_harmonics_to_include"], 2)[0]
-    one_hot = np.eye(config["gear_harmonics_to_include"])
-
-    single_mask = 1 - one_hot[block_to_mask].repeat(
-        config["gear_sideband_block_size"] * 4 + 1
-    )
-
-    unmasked = np.ones_like(single_mask)
-    mask = np.array([single_mask, unmasked, single_mask, unmasked]).repeat(
-        config["k_shot"] // 2, axis=0
-    )
-    mask = mask[np.newaxis, :, :]
-
-    return batch * mask
-
-
-def mask_blocks2(batch, config, split, rng):
-    """
-    Mask two harmonic blocks per sample to zero. Different harmonics for each sample.
-    """
-
-    # Skip masking during validation and testing or with 50% chance
-    if split != "train" or rng.choice([True, False], p=[0.5, 0.5]):
-        return batch
-    mask1 = rng.integers(
-        0, config["gear_harmonics_to_include"], batch.shape[0] * batch.shape[1]
-    )
-    mask2 = rng.integers(
-        0, config["gear_harmonics_to_include"], batch.shape[0] * batch.shape[1]
-    )
-
-    one_hot = np.eye(config["gear_harmonics_to_include"])
-    mask1 = one_hot[mask1].astype(np.bool)
-    mask2 = one_hot[mask2].astype(np.bool)
-    mask = mask1 | mask2
-    mask = mask.repeat(config["gear_sideband_block_size"] * 4 + 1, axis=-1)
-    mask = mask.reshape(batch.shape[0], batch.shape[1], -1)
-
-    batch[mask] = 0
-    return batch
-
-
-def mask_blocks_non_episodic_OLD(batch, config, split, rng):
-    """
-    Mask blocks of the batch to zero for non-episodic training.
-    """
-
-    # Skip masking during validation and testing or with 50% chance
-    if (
-        split != "train"
-        or config["num_blocks_to_mask"] == 0
-        or rng.choice([True, False], p=[0.5, 0.5])
-    ):
-        return batch
-
-    one_hot_helper = np.eye(config["gear_harmonics_to_include"])
-
-    # if rng.choice([True, False], p=[0.5, 0.5]):
-    # NOTE: Same harmonic masked for each sample
-    blocks_to_mask = rng.integers(
-        0, config["gear_harmonics_to_include"], size=config["num_blocks_to_mask"]
-    )
-    masks = []
-    for i in blocks_to_mask:
-        masks.append(one_hot_helper[i].astype(np.bool))
-    masks = np.stack(masks, axis=0)
-    mask = np.logical_or.reduce(masks, axis=0)
-    mask = mask.repeat(config["gear_sideband_block_size"] * 4 + 1, axis=0)
-    mask = mask[np.newaxis, :].repeat(batch.shape[0], axis=0)
-    # else:
-    #     # NOTE: Different harmonic masked for each sample
-    #     masks = []
-    #     for _ in range(config["num_blocks_to_mask"]):
-    #         mask = rng.integers(0, config["gear_harmonics_to_include"], batch.shape[0])
-    #         mask = one_hot_helper[mask].astype(np.bool)
-    #         masks.append(mask)
-    #     masks = np.stack(masks, axis=0)
-    #     mask = np.logical_or.reduce(masks, axis=0)
-    #     mask = mask.repeat(config["gear_sideband_block_size"] * 4 + 1, axis=-1)
-
-    batch[mask] = 0
-    return batch
-
-
 def mask_blocks_non_episodic(batch, config, split, rng):
     """
     Mask blocks of the batch to zero for non-episodic training.
@@ -470,48 +328,6 @@ def mask_blocks_non_episodic(batch, config, split, rng):
     # Apply mask to all samples in batch
     batch = batch.copy()
     batch[:, ~mask] = 0
-    return batch
-
-
-def mask_blocks_non_cherry_picked(batch, config, split, rng):
-    # FIXME: Does the math check out with even number of teeth?
-
-    # TODO: Test if 50% good
-    # Skip masking during validation and testing or with 50% chance
-    if (
-        split != "train"
-        or config["num_blocks_to_mask"] == 0
-        or rng.choice([True, False], p=[0.5, 0.5])
-    ):
-        return batch
-
-    one_hot_helper = np.eye(config["harmonics_to_include"])
-
-    if rng.choice([True, False], p=[0.5, 0.5]):
-        # NOTE: Same harmonic masked for each sample
-        blocks_to_mask = rng.integers(
-            0, config["gear_harmonics_to_include"], size=config["num_blocks_to_mask"]
-        )
-        masks = []
-        for i in blocks_to_mask:
-            masks.append(one_hot_helper[i].astype(np.bool))
-        masks = np.stack(masks, axis=0)
-        mask = np.logical_or.reduce(masks, axis=0)
-        mask = mask.repeat(15, axis=0)  # FIXME: 15 hard coded
-        mask = mask[np.newaxis, :].repeat(batch.shape[0], axis=0)
-    else:
-        # NOTE: Different harmonic masked for each sample
-
-        masks = []
-        for _ in range(config["num_blocks_to_mask"]):
-            mask = rng.integers(0, config["gear_harmonics_to_include"], batch.shape[0])
-            mask = one_hot_helper[mask].astype(np.bool)
-            masks.append(mask)
-        masks = np.stack(masks, axis=0)
-        mask = np.logical_or.reduce(masks, axis=0)
-        mask = mask.repeat(15, axis=-1)  # FIXME: 15 harc coded
-
-    batch[mask] = 0
     return batch
 
 
