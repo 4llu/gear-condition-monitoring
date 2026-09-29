@@ -1,0 +1,219 @@
+#? Creation
+name: SCENARIO_UNSW
+log: true
+save: true
+
+#? Validation and testing
+validation_interval: 50 # * In batches
+validation_batches: 100
+test_interval: 50 # * In batches
+test_batches: 100
+# test_extra_logging_interval: 250
+test_extra_logging_interval: 0
+
+#? Datasets
+train_datasets: [ALL_UM]
+validation_datasets: [AGFD]
+test_datasets: [AGFD]
+
+# Teeth
+# Yes, this is a bit wasteful, but it makes things easier
+UNSW_train_teeth: 27
+UNSW_test_teeth: 27
+UNSW_validation_teeth: 27
+AGFD_train_teeth: 15
+AGFD_validation_teeth: 15
+AGFD_test_teeth: 15
+ASD_train_teeth: 15
+ASD_validation_teeth: 15
+ASD_test_teeth: 15
+MCC5_train_teeth: 36
+MCC5_validation_teeth: 36
+MCC5_test_teeth: 36
+
+class_map:
+    healthy: 0
+    crack: 1
+    wear: 2
+    # pitting: 3
+    # missing_tooth: 4
+
+use_difference: true
+episodic_training: false
+average_over_anchors: true # Only works for non-episodic training
+
+# Only for validation and testing when using non-episodic training
+k_shot: 10
+n_query: 10
+
+#* ALL
+separate_dataset_batches: true # Only works for non-episodic training
+
+# per batch
+ALL_train_num_options: 5
+ALL_train_num_anchors: 20
+ALL_train_num_queries: 5
+
+ALL_train_num_installations: 2
+
+#* UNSW [ALL]
+##
+
+UNSW_train_OT_method: nico # XXX
+# UNSW_train_OT_method: signal
+UNSW_train_TSA_size: 40
+
+UNSW_train_speeds: [5, 10, 15, 20] # ???
+UNSW_train_loads: [5, 10, 15]
+UNSW_train_classes: [healthy, crack]
+UNSW_train_severities: [H, S, M, L] # * Needs both H & S
+
+#* MCC5-THU [ALL]
+##
+
+MCC5_train_OT_method: signal
+MCC5_train_TSA_size: 30
+
+MCC5_train_sensors: [gearbox_vibration_x]
+# MCC5_train_sensors: [gearbox_vibration_x, gearbox_vibration_y]
+MCC5_train_speeds: [1000, 1500, 2000, 2500, 3000]
+MCC5_train_loads: [5, 10, 15, 20]
+MCC5_train_classes: [healthy, crack, wear] # XXX
+MCC5_train_severities: [M, L]
+
+#* AGFD [ALL]
+##
+
+AGFD_train_OT_method: signal
+AGFD_train_TSA_size: 40
+
+AGFD_train_sensors: [acc4]
+AGFD_train_speeds: [500, 750, 1000, 1250] # Skip 250
+AGFD_train_loads: [1, 6, 11]
+AGFD_train_installations: [1, 2, 3]
+AGFD_train_healthy_GPs: [2, 3, 4, 5, 6, 9] # 1 & 7 not good, 8 doesn't exist
+# AGFD_train_speeds: [500, 750, 1000, 1250, 1500] # Skip 250
+# AGFD_train_loads: [1, 6, 11]
+# AGFD_train_installations: [1, 2, 3]
+# AGFD_train_healthy_GPs: [2, 3, 4, 5, 6, 9] # 1 & 7 not good, 8 doesn't exist
+AGFD_train_classes: [healthy, crack, wear]
+AGFD_train_severities: [S, L]
+AGFD_train_include_large_crack: false
+AGFD_train_include_small_wear: false
+
+#* ASD [ALL]
+##
+
+ASD_train_OT_method: signal # Unused (only option in ASD)
+ASD_train_TSA_size: 45 # Unused (only option in ASD)
+
+ASD_train_sensors: [acc4]
+ASD_train_speeds: [500, 750, 1000, 1250] # Skip 250
+ASD_train_loads: [1, 6, 11]
+ASD_train_installations: [1, 2, 3]
+ASD_train_healthy_GPs: [1, 4, 5, 7, 10]
+ASD_train_classes: [healthy, 1-shim, 2-shim, 3-shim]
+ASD_train_severities: [S, M, L]
+
+#* UNSW VALIDATION
+##
+
+UNSW_validation_shift_methods: [load]
+
+UNSW_validation_OT_methods: [signal]
+UNSW_validation_TSA_sizes: [40]
+UNSW_validation_speeds: [5, 10, 15, 20]
+UNSW_validation_loads: [5, 10, 15]
+UNSW_validation_classes: [healthy, crack]
+UNSW_validation_severities: [S, M, L]
+
+#* UNSW TEST
+##
+
+UNSW_test_shift_methods: [load_and_severity]
+
+UNSW_test_OT_methods: [signal]
+UNSW_test_TSA_sizes: [40]
+UNSW_test_speeds: [5, 10, 15, 20]
+UNSW_test_loads: [5, 10, 15]
+UNSW_test_classes: [healthy, crack]
+UNSW_test_severities: [H, S, M, L]
+
+#? Preprocessing
+# * Order matters
+
+preprocessing_individual: [cherry_pick_indices] # FIXME
+preprocessing_batch: [amplitude_log10]
+# preprocessing_difference_batch: [augment_amplitude]
+preprocessing_difference_batch: [
+        permutate_blocks,
+        mask_blocks_non_episodic,
+        # permute_within_blocks,
+        augment_amplitude,
+    ]
+# preprocessing_difference_batch: [mask_blocks_non_episodic, augment_amplitude]
+
+#? Preprocessing additional arguments
+num_blocks_to_mask: 1 # Only `mask_blocks_non_episodic`
+amplitude_augment_low: 0.5
+amplitude_augment_high: 1.5
+# amplitude_augment_low: 0.8
+# amplitude_augment_high: 1.2
+# Frequency cherry picking
+gear_harmonics_to_include: 8
+gear_sideband_block_size: 5
+# gear_sideband_block_size: 7 # !!!
+
+#? Model
+
+model: embedding
+
+loss: triplet
+loss_args:
+    # margin: 2.0
+    margin: 1.4
+    miner: True
+    miner_type: all
+similarity: euclidean
+lpnorm_embeddings_training: False
+center_embeddings_inference: False
+lpnorm_embeddings_inference: False
+
+# ? Remember to set intermediate_L2 to True in the model_args
+# loss: supcon
+# loss_args:
+#     temperature: 0.08
+# similarity: cosine # Default: cosine
+# lpnorm_embeddings_training: True # Default: True
+# center_embeddings_inference: True
+# lpnorm_embeddings_inference: True # Default: True
+
+embedding_len: 2
+backbone: MlpMixer
+model_args:
+    intermediate_L2: false
+    num_layers: 3
+    hidden_dim: 32
+    tokens_mlp_dim: 16
+    channels_mlp_dim: 64
+    # hidden_dim: 21
+    # tokens_mlp_dim: 16
+    # channels_mlp_dim: 42
+
+# ? Training
+
+episodes_per_dataset_per_batch: 2 # FIXME: Automatically use number of datasets in training
+max_batches: 1501
+# max_batches: 501
+warmup_batches: 100
+lr: 0.001
+sch_gamma: 0.998
+momentum: 0.9
+b2: 0.999
+gradient_clip: 0
+# gradient_clip: 2.5
+
+# Regularization
+weight_decay: 1.0e-04
+dropout: 0.5 # XXX
+# dropout: 0.3
