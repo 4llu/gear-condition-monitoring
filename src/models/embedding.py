@@ -63,10 +63,13 @@ class Embedding(nn.Module):
                 )
         # Triplet
         elif self.config["loss"] == "triplet":
-            # NOTE: Eucliden distance
+            # NOTE: Without `distance`, pytorch-metric-learning defaults to
+            # LpDistance(normalize_embeddings=True), ignoring `similarity` and
+            # `lpnorm_embeddings_training`
             # sum_reducer = reducers.SumReducer()  # XXX
             self.loss_fn = losses.TripletMarginLoss(
                 margin=self.config["loss_args"]["margin"],
+                distance=self.distance_fn,
                 # reducer=sum_reducer,
             )
 
@@ -74,6 +77,7 @@ class Embedding(nn.Module):
                 self.miner = miners.TripletMarginMiner(
                     type_of_triplets=self.config["loss_args"]["miner_type"],
                     margin=self.config["loss_args"]["margin"],
+                    distance=self.distance_fn,
                 )
         # Circle loss
         elif self.config["loss"] == "circle":

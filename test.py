@@ -181,6 +181,11 @@ def embed(
     return embeddings.detach().numpy()
 
 
+def embedding_columns():
+    """DataFrame columns holding the embedding, one per embedding dimension."""
+    return [f"emb_{i}" for i in range(config["embedding_len"])]
+
+
 def embed_wrapper(samples, anchors, embedding_model, config, embedding_specs):
     if config["use_difference"]:
         samples = samples[:, np.newaxis, :] - anchors[np.newaxis, :, :]
@@ -195,7 +200,7 @@ def embed_wrapper(samples, anchors, embedding_model, config, embedding_specs):
         )
 
     embeddings = embed(samples, embedding_model, **embedding_specs)
-    return pd.DataFrame(embeddings, columns=["x", "y"])
+    return pd.DataFrame(embeddings, columns=embedding_columns())
 
 
 def prepare_samples(samples, teeth):
@@ -352,23 +357,17 @@ def apply_training_config(weight_dir):
     print(
         f"Using settings from run_info.yaml: {training_settings['gear_harmonics_to_include']} "
         f"harmonics, sideband block size {training_settings['gear_sideband_block_size']}, "
+        f"{training_settings['embedding_len']}-D embeddings, "
         f"{training_settings['similarity']} similarity"
+        + (", centered" if training_settings["center_embeddings_inference"] else "")
         + (
-            ", centered"
-            if training_settings["similarity"] == "cosine"
-            and training_settings["center_embeddings_inference"]
+            ", L2-normalized"
+            if training_settings["similarity"] == "euclidean"
+            and training_settings["lpnorm_embeddings_inference"]
             else ""
         )
         + "."
     )
-    if training_settings["similarity"] == "euclidean" and (
-        training_settings["center_embeddings_inference"]
-        or training_settings["lpnorm_embeddings_inference"]
-    ):
-        print(
-            "WARNING: centering/L2-normalization at inference is ignored for euclidean "
-            "similarity, unlike in the evaluation during training."
-        )
 
 
 def vote(ensemble_distances):
@@ -403,30 +402,24 @@ def vote(ensemble_distances):
 def prototype_distances(query_embs, prototypes):
     """
     Distance of every query to every prototype, (n_queries, n_prototypes), lower is
-    closer. Prototypes are means of raw embeddings, as in training.
-
-    Euclidean: plain distance between the raw embeddings.
-    Cosine: same as Embedding.predict in training, i.e. optionally center both on the
-        mean of the prototypes, L2-normalize both and compare with cosine similarity.
-        Returned as cosine distance (1 - similarity), so that soft voting and argmin
-        work the same way as for euclidean.
+    closer. Prototypes are means of raw embeddings. Follows Embedding.predict in
+    training:
+        1. If center_embeddings_inference, center both on the mean of the prototypes
+        2. If cosine similarity or lpnorm_embeddings_inference, L2-normalize both
+        3. Euclidean distance, or cosine distance (1 - cosine similarity) so that soft
+           voting and argmin work the same way for both
     """
-    if config["similarity"] == "euclidean":
-        return np.stack(
-            [
-                np.linalg.norm(query_embs - prototype[np.newaxis, :], axis=1)
-                for prototype in prototypes
-            ],
-            axis=1,
-        )
-    elif config["similarity"] == "cosine":
-        prototypes = np.stack(prototypes)
+    if config["similarity"] not in ("euclidean", "cosine"):
+        raise ValueError(f"Unknown similarity type '{config['similarity']}'!")
 
-        if config["center_embeddings_inference"]:
-            mean = np.mean(prototypes, axis=0)
-            prototypes = prototypes - mean
-            query_embs = query_embs - mean
+    prototypes = np.stack(prototypes)
 
+    if config["center_embeddings_inference"]:
+        mean = np.mean(prototypes, axis=0)
+        prototypes = prototypes - mean
+        query_embs = query_embs - mean
+
+    if config["similarity"] == "cosine" or config["lpnorm_embeddings_inference"]:
         # Same epsilon as F.normalize
         prototypes = prototypes / np.maximum(
             np.linalg.norm(prototypes, axis=-1, keepdims=True), 1e-12
@@ -435,9 +428,15 @@ def prototype_distances(query_embs, prototypes):
             np.linalg.norm(query_embs, axis=-1, keepdims=True), 1e-12
         )
 
-        return 1 - query_embs @ prototypes.T
-    else:
-        raise ValueError(f"Unknown similarity type '{config['similarity']}'!")
+    if config["similarity"] == "euclidean":
+        return np.stack(
+            [
+                np.linalg.norm(query_embs - prototype[np.newaxis, :], axis=1)
+                for prototype in prototypes
+            ],
+            axis=1,
+        )
+    return 1 - query_embs @ prototypes.T
 
 
 # UNSW
@@ -607,14 +606,14 @@ def run_UNSW(model, weight_dir):
                         # Get possible prototypes
 
                         healthy_prototype_H1 = (
-                            round_df[round_df["severity"] == "H1"][["x", "y"]]
+                            round_df[round_df["severity"] == "H1"][embedding_columns()]
                             .to_numpy()
                             .mean(axis=0)
                         )
 
                         crack_prototype = (
                             round_df[round_df["severity"] == support_severity][
-                                ["x", "y"]
+                                embedding_columns()
                             ]
                             .to_numpy()
                             .mean(axis=0)
@@ -633,7 +632,7 @@ def run_UNSW(model, weight_dir):
                             .to_numpy()
                         )
 
-                        query_embs = query_df[["x", "y"]].to_numpy()
+                        query_embs = query_df[embedding_columns()].to_numpy()
 
                         # Calculate query distances to prototypes
                         #   H1 always used as healthy prototype
@@ -876,7 +875,7 @@ def run_MCC5(model, weight_dir):
                             round_df[
                                 (round_df["class"] == "healthy")
                                 & (round_df["severity"] == "H1")
-                            ][["x", "y"]]
+                            ][embedding_columns()]
                             .to_numpy()
                             .mean(axis=0)
                         )
@@ -885,7 +884,7 @@ def run_MCC5(model, weight_dir):
                             round_df[
                                 (round_df["class"] == "crack")
                                 & (round_df["severity"] == support_severity)
-                            ][["x", "y"]]
+                            ][embedding_columns()]
                             .to_numpy()
                             .mean(axis=0)
                         )
@@ -894,7 +893,7 @@ def run_MCC5(model, weight_dir):
                             round_df[
                                 (round_df["class"] == "wear")
                                 & (round_df["severity"] == support_severity)
-                            ][["x", "y"]]
+                            ][embedding_columns()]
                             .to_numpy()
                             .mean(axis=0)
                         )
@@ -914,7 +913,7 @@ def run_MCC5(model, weight_dir):
                             })
                             .to_numpy()
                         )
-                        query_embs = query_df[["x", "y"]].to_numpy()
+                        query_embs = query_df[embedding_columns()].to_numpy()
 
                         distances = prototype_distances(
                             query_embs,
@@ -1197,7 +1196,7 @@ def run_AGFD(model, weight_dir):
                                 round_df[
                                     (round_df["class"] == "healthy")
                                     & (round_df["severity"] == "H1")
-                                ][["x", "y"]]
+                                ][embedding_columns()]
                                 .to_numpy()
                                 .mean(axis=0)
                             )
@@ -1207,7 +1206,7 @@ def run_AGFD(model, weight_dir):
                                     (round_df["class"] == "crack")
                                     & (round_df["severity"] == "S")
                                     & (round_df["installation"] == support_installation)
-                                ][["x", "y"]]
+                                ][embedding_columns()]
                                 .to_numpy()
                                 .mean(axis=0)
                             )
@@ -1216,7 +1215,7 @@ def run_AGFD(model, weight_dir):
                                 round_df[
                                     (round_df["class"] == "wear")
                                     & (round_df["severity"] == "L")
-                                ][["x", "y"]]
+                                ][embedding_columns()]
                                 .to_numpy()
                                 .mean(axis=0)
                             )
@@ -1233,7 +1232,7 @@ def run_AGFD(model, weight_dir):
                                 .to_numpy()
                             )
 
-                            query_embs = query_df[["x", "y"]].to_numpy()
+                            query_embs = query_df[embedding_columns()].to_numpy()
 
                             distances = prototype_distances(
                                 query_embs,
