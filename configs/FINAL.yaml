@@ -5,10 +5,10 @@ save: true
 seed: null # * null -> random seed (still saved in run_info.yaml), --seed overrides
 
 #? Validation and testing
-validation_interval: 100 # * In batches
-validation_batches: 10
-test_interval: 100
-test_batches: 10
+validation_interval: 250 # * In batches
+validation_batches: 5
+test_interval: 250
+test_batches: 5
 test_extra_logging_interval: 0
 
 #? Datasets
@@ -210,7 +210,7 @@ preprocessing_individual: [cherry_pick_indices] # FIXME
 preprocessing_batch: [amplitude_log10]
 # preprocessing_difference_batch: [augment_amplitude]
 preprocessing_difference_batch: [
-        permutate_blocks,
+        # permutate_blocks,
         mask_blocks_non_episodic,
         # permute_within_blocks,
         augment_amplitude,
@@ -219,15 +219,13 @@ preprocessing_difference_batch: [
 
 #? Preprocessing additional arguments
 num_blocks_to_mask: 1 # Only `mask_blocks_non_episodic`
-amplitude_augment_low: 0.5
-amplitude_augment_high: 1.5
-# amplitude_augment_low: 0.8
-# amplitude_augment_high: 1.2
+# amplitude_augment_low: 0.5
+# amplitude_augment_high: 1.5
+amplitude_augment_low: 0.8
+amplitude_augment_high: 1.2
 # Frequency cherry picking
-# gear_harmonics_to_include: 10 # XXX
 gear_harmonics_to_include: 8
 gear_sideband_block_size: 5
-# gear_sideband_block_size: 7 # !!!
 
 #? Model
 
@@ -247,7 +245,8 @@ lpnorm_embeddings_inference: false
 # ? Remember to set intermediate_L2 to True in the model_args
 # loss: supcon
 # loss_args:
-#     temperature: 0.08
+#     temperature: 0.02
+#     # temperature: 0.08 # Canonical
 # similarity: cosine # Default: cosine
 # lpnorm_embeddings_training: True # Default: True
 # center_embeddings_inference: True
@@ -256,7 +255,8 @@ lpnorm_embeddings_inference: false
 embedding_len: 2
 backbone: MlpMixer
 model_args:
-    intermediate_L2: false
+    # intermediate_L2: True
+    intermediate_L2: False # CANONICAL
     num_layers: 3
     hidden_dim: 32
     tokens_mlp_dim: 16
@@ -268,7 +268,7 @@ model_args:
 # ? Training
 
 episodes_per_dataset_per_batch: 2 # FIXME: Automatically use number of datasets in training
-max_batches: 901 # XXX
+max_batches: 501 # XXX
 # max_batches: 1501
 # max_batches: 501
 # warmup_batches: 0 # XXX

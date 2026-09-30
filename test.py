@@ -6,6 +6,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from einops import reduce
+from ruamel.yaml import YAML
 
 from src.data.preprocessing_individual import get_important_frequencies
 from src.models.models import setup_model
@@ -15,10 +16,13 @@ from src.utils.init import setup_device
 ###
 
 # SETUP
+ENSEMBLE_SIZE = 3
+ENSEMBLE_CHECKPOINT_NUM = 5
 
-UNSW_teeth = 27
-AGFD_teeth = 15
-MCC5_teeth = 36
+device = setup_device(override="cpu")
+MODEL_WEIGHT_DIR = Path.cwd().resolve() / "model_weights"
+# Keeps log10 finite for zero-valued spectrum bins
+LOG_EPS = 1e-12
 
 embedding_specs = {
     "normalize_embeddings": False,
@@ -32,52 +36,62 @@ embedding_specs = {
 }
 
 config = {
-    "use_difference": True,
-    "gear_harmonics_to_include": 8,
-    "gear_sideband_block_size": 5,
-    # "gear_sideband_block_size": 3,  # XXX
-    "embedding_len": 2,
-    "model": "embedding",
-    "backbone": "MlpMixer",
-    "model_args": {
-        "intermediate_L2": False,
-        # "intermediate_L2": True,  # XXX
-        # NORMAL
-        # "num_layers": 4,
-        # "hidden_dim": 21,
-        # "tokens_mlp_dim": 16,
-        # "channels_mlp_dim": 42,
-        # LARGER HIDDEN
-        "num_layers": 3,
-        "hidden_dim": 32,
-        "tokens_mlp_dim": 16,
-        "channels_mlp_dim": 64,
-        # TUNI
-        # "num_layers": 4,
-        # "hidden_dim": 18,
-        # "tokens_mlp_dim": 16,
-        # "channels_mlp_dim": 18,
-    },
+    # These do not matter
     "dropout": 0.0,
     "loss": "triplet",
+    "similarity": "euclidean",
     "loss_args": {
         "margin": 1.4,  # Doesn't matter during inference
         "miner": False,  # Doesn't matter during inference
     },
-    "similarity": "euclidean",  # Doesn't matter during inference
-    "lpnorm_embeddings_training": False,  # All of these are False to do them manually
+    # All of these are False to do them manually
+    "lpnorm_embeddings_training": False,
     "center_embeddings_inference": False,
     "lpnorm_embeddings_inference": False,
+    #
 }
+# config = {
+#     "use_difference": True,
+#     "gear_harmonics_to_include": 8,
+#     "gear_sideband_block_size": 5,
+#     # "gear_sideband_block_size": 3,  # XXX
+#     "embedding_len": 2,
+#     "model": "embedding",
+#     "backbone": "MlpMixer",
+#     "model_args": {
+#         "intermediate_L2": False,
+#         # "intermediate_L2": True,  # XXX
+#         # NORMAL
+#         # "num_layers": 4,
+#         # "hidden_dim": 21,
+#         # "tokens_mlp_dim": 16,
+#         # "channels_mlp_dim": 42,
+#         # LARGER HIDDEN
+#         "num_layers": 3,
+#         "hidden_dim": 32,
+#         "tokens_mlp_dim": 16,
+#         "channels_mlp_dim": 64,
+#         # TUNI
+#         # "num_layers": 4,
+#         # "hidden_dim": 18,
+#         # "tokens_mlp_dim": 16,
+#         # "channels_mlp_dim": 18,
+#     },
+#     "dropout": 0.0,
+#     "loss": "triplet",
+#     "loss_args": {
+#         "margin": 1.4,  # Doesn't matter during inference
+#         "miner": False,  # Doesn't matter during inference
+#     },
+#     "similarity": "euclidean",  # Doesn't matter during inference
+#     "lpnorm_embeddings_training": False,  # All of these are False to do them manually
+#     "center_embeddings_inference": False,
+#     "lpnorm_embeddings_inference": False,
+# }
 
-device = setup_device(override="cpu")
-
-MODEL_WEIGHT_DIR = Path.cwd().resolve() / "model_weights"
-ENSEMBLE_SIZE = 5
-ENSEMBLE_CHECKPOINT_NUM = 9
-# Keeps log10 finite for zero-valued spectrum bins
-LOG_EPS = 1e-12
-
+UNSW_teeth = 27
+AGFD_teeth = 15
+MCC5_teeth = 36
 
 # HELPERS
 ###
@@ -250,6 +264,64 @@ def find_ensemble_members(weight_dir):
         )
 
     return member_dirs, ensemble_repeats
+
+
+# Config entries that define the input features and model architecture. They are
+# read from the trained models' run_info.yaml, the values in `config` above are only
+# used for older weights without one.
+TRAINING_CONFIG_KEYS = [
+    "use_difference",
+    "gear_harmonics_to_include",
+    "gear_sideband_block_size",
+    "embedding_len",
+    "model",
+    "backbone",
+    "model_args",
+]
+
+
+def apply_training_config(weight_dir):
+    """Update `config` with the settings the ensemble members were trained with."""
+    member_dirs = [
+        d
+        for d in sorted(weight_dir.iterdir())
+        if (d / f"{ENSEMBLE_CHECKPOINT_NUM}.pth").is_file()
+    ]
+    run_info_paths = [
+        d / "run_info.yaml" for d in member_dirs if (d / "run_info.yaml").is_file()
+    ]
+
+    if not run_info_paths:
+        print(
+            "No run_info.yaml found, using the input and model settings hard-coded in test.py."
+        )
+        return
+    if len(run_info_paths) < len(member_dirs):
+        raise SystemExit(
+            f"Only {len(run_info_paths)} of {len(member_dirs)} members in {weight_dir} have a run_info.yaml"
+        )
+
+    yaml = YAML(typ="safe")
+    training_settings = None
+    for path in run_info_paths:
+        with open(path) as stream:
+            training_config = yaml.load(stream)["config"]
+        settings = {key: training_config[key] for key in TRAINING_CONFIG_KEYS}
+
+        # All members of the ensembles must share the same inputs and architecture
+        if training_settings is None:
+            training_settings = settings
+        elif settings != training_settings:
+            raise SystemExit(
+                f"{path.parent.name} was trained with different settings than "
+                f"{run_info_paths[0].parent.name}:\n{settings}\nvs\n{training_settings}"
+            )
+
+    config.update(training_settings)
+    print(
+        f"Using settings from run_info.yaml: {training_settings['gear_harmonics_to_include']} "
+        f"harmonics, sideband block size {training_settings['gear_sideband_block_size']}."
+    )
 
 
 # UNSW
@@ -503,6 +575,9 @@ def run_UNSW(model, weight_dir):
         print(f"UNSW Average Accuracy: \033[92m{np.mean(UNSW_accuracies):.4%}\033[0m")
         all_accuracies.append(np.mean(UNSW_accuracies))
     print(f"All accuracies: {np.mean(all_accuracies):.4%}")
+
+    # Average accuracy of each ensemble
+    return all_accuracies
 
 
 # MCC5
@@ -794,6 +869,9 @@ def run_MCC5(model, weight_dir):
         print(f"MCC5 average accuracy: \033[92m{np.mean(MCC5_accuracies):.4%}\033[0m")
         all_accuracies.append(np.mean(MCC5_accuracies))
     print(f"All accuracies: {np.mean(all_accuracies):.4%}")
+
+    # Average accuracy of each ensemble
+    return all_accuracies
 
 
 # AGFD
@@ -1133,6 +1211,9 @@ def run_AGFD(model, weight_dir):
         all_accuracies.append(np.mean(AGFD_accuracies))
     print(f"All accuracies: {np.mean(all_accuracies):.4%}")
 
+    # Average accuracy of each ensemble
+    return all_accuracies
+
 
 # MAIN
 ###
@@ -1160,6 +1241,16 @@ def parse_args():
     return parser.parse_args()
 
 
+def evaluate(weight_dir, dataset):
+    """Test the ensembles in `weight_dir` on `dataset`, returns each ensemble's accuracy."""
+    apply_training_config(weight_dir)
+
+    model = setup_model(config, device)
+    model.eval()
+
+    return RUNNERS[dataset](model, weight_dir)
+
+
 def main():
     args = parse_args()
 
@@ -1167,10 +1258,7 @@ def main():
     if not weight_dir.is_dir():
         raise SystemExit(f"Weight directory not found: {weight_dir}")
 
-    model = setup_model(config, device)
-    model.eval()
-
-    RUNNERS[args.dataset](model, weight_dir)
+    evaluate(weight_dir, args.dataset)
 
 
 if __name__ == "__main__":

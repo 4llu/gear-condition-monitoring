@@ -39,6 +39,57 @@ def get_output_dir(dataset_code):
     return output_dir
 
 
+def train_ensemble(config, runs, seed, device, log):
+    """
+    Train `runs` models with `config`, run i using seed + i (the config's seed
+    if `seed` is None, a random one if neither is set). Returns the directory
+    the weights were saved to.
+    """
+    if not config["save"]:
+        # Saving the weights is the whole point of this script
+        log.warning("Config has save: false, overriding to true")
+        config["save"] = True
+
+    output_dir = get_output_dir(get_dataset_code(config["train_datasets"]))
+    base_seed = resolve_seed(seed if seed is not None else config.get("seed"))
+
+    log.info("")
+    log.info("##")
+    log.info(f"# REPEATED RUNS: {config['name']} - {config['model']} x {runs}")
+    log.info(f"# Saving weights to: {output_dir}")
+    log.info(f"# Base seed: {base_seed}")
+    log.info("##")
+    log.info("")
+    log.info(pformat(config, width=1, sort_dicts=False))
+
+    for run_i in range(runs):
+        log.info("")
+        # Different but reproducible seed for every ensemble member
+        # * Stored in the config, so it is saved in the run's run_info.yaml
+        run_seed = base_seed + run_i
+        config["seed"] = run_seed
+        seed_everything(run_seed)
+
+        log.info(f"# RUN {run_i + 1}/{runs} (seed {run_seed})")
+        log.info("")
+
+        # Fresh data loaders for every run
+        train_loaders, validation_loader, test_loader = setup_data(
+            config, device, seed=run_seed
+        )
+
+        run_single_training(
+            train_loaders,
+            validation_loader,
+            test_loader,
+            config,
+            device,
+            model_weight_dir=output_dir,
+        )
+
+    return output_dir
+
+
 def parse_args():
     parser = ArgumentParser(
         description=(
@@ -72,50 +123,7 @@ def main():
     config = setup_config(args.config)
     log = setup_logging(log_to_file=config["log"])
 
-    if not config["save"]:
-        # Saving the weights is the whole point of this script
-        log.warning("Config has save: false, overriding to true")
-        config["save"] = True
-
-    output_dir = get_output_dir(get_dataset_code(config["train_datasets"]))
-    base_seed = resolve_seed(
-        args.seed if args.seed is not None else config.get("seed")
-    )
-
-    log.info("")
-    log.info("##")
-    log.info(f"# REPEATED RUNS: {config['name']} - {config['model']} x {args.runs}")
-    log.info(f"# Saving weights to: {output_dir}")
-    log.info(f"# Base seed: {base_seed}")
-    log.info("##")
-    log.info("")
-    log.info(pformat(config, width=1, sort_dicts=False))
-
-    for run_i in range(args.runs):
-        log.info("")
-        # Different but reproducible seed for every ensemble member
-        # * Stored in the config, so it is saved in the run's run_info.yaml
-        seed = base_seed + run_i
-        config["seed"] = seed
-        seed_everything(seed)
-
-        log.info(f"# RUN {run_i + 1}/{args.runs} (seed {seed})")
-        log.info("")
-
-        # Fresh data loaders for every run
-        train_loaders, validation_loader, test_loader = setup_data(
-            config, device, seed=seed
-        )
-
-        run_single_training(
-            train_loaders,
-            validation_loader,
-            test_loader,
-            config,
-            device,
-            model_weight_dir=output_dir,
-        )
-
+    output_dir = train_ensemble(config, args.runs, args.seed, device, log)
     log.info("")
     log.info(f"Finished {args.runs} runs, weights in {output_dir}")
 

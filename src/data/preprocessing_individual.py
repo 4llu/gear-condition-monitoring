@@ -6,18 +6,31 @@ import numpy as np
 
 def get_important_frequencies(teeth, harmonics, sideband_block_size):
     """
-    Calculate important frequencies for gear analysis. `sidebank_block_size`
-    furthest and closest sidebands (on both sides) to each GMF harmonic will
-    be included, in addition to the harmonic itself.
+    Calculate important frequencies for gear analysis. For each GMF harmonic,
+    the `sideband_block_size` furthest and closest sidebands on both sides are
+    included, in addition to the harmonic itself. The furthest sideband is
+    `ceil(teeth / 2 - 1)` orders from the harmonic.
+
+    The output always has `harmonics * (4 * sideband_block_size + 1)` entries,
+    independent of `teeth`, so datasets with different gears give inputs of
+    the same size.
+
+    NOTE: If `2 * sideband_block_size > furthest_sideband`, the furthest and
+    closest blocks on the same side overlap, so some frequencies are included
+    twice and the output is no longer in ascending order. With
+    `sideband_block_size > furthest_sideband`, blocks also reach into the
+    neighbouring harmonic's sidebands. The largest non-overlapping block size
+    is 3 for 15 teeth (AGFD), 6 for 27 teeth (UNSW) and 8 for 36 teeth (MCC5).
 
     Args:
         teeth (int): Number of teeth on the gear
-        harmonics (int): Number of harmonics to consider
-        furthest_sideband (int): Maximum sideband distance from harmonic
-        sideband_block_size (int): Number of sidebands to include in each block
+        harmonics (int): Number of GMF harmonics to include
+        sideband_block_size (int): Number of sidebands in each block
 
     Returns:
-        list: Important frequencies in ascending order
+        list: Frequency indices (in orders), grouped per harmonic as
+            [furthest left, closest left, harmonic, closest right, furthest right].
+            Ascending only when the blocks don't overlap.
     """
 
     important_freq = []
