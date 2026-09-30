@@ -17,6 +17,9 @@ from src.utils.init import setup_device
 
 # SETUP
 ENSEMBLE_SIZE = 3
+# How ensemble members are combined: "soft" averages the members' distances to each
+# prototype, "hard" takes a majority vote of the members' predictions
+VOTING_TYPE = "soft"
 ENSEMBLE_CHECKPOINT_NUM = 5
 
 device = setup_device(override="cpu")
@@ -110,7 +113,8 @@ def remove_anchor_outliers(embeddings, num_outliers=5):
         _, closest_indices = torch.topk(
             distances[i], distances.shape[1] - num_outliers, largest=False
         )
-        filtered_embeddings.append(embeddings[i][closest_indices, :])
+        # topk orders by distance, keep the original order instead
+        filtered_embeddings.append(embeddings[i][closest_indices.sort().values, :])
 
     filtered_embeddings = torch.stack(filtered_embeddings, dim=0)
 
@@ -128,7 +132,9 @@ def remove_batch_outliers(embeddings, num_outliers=5):
     _, closest_indices = torch.topk(
         distances, distances.shape[0] - num_outliers, largest=False
     )
-    return embeddings[closest_indices, :]
+    # topk orders by distance, keep the original order so that the same row is the
+    # same sample for every ensemble member (needed for voting without batch averaging)
+    return embeddings[closest_indices.sort().values, :]
 
 
 def embed(
@@ -266,9 +272,9 @@ def find_ensemble_members(weight_dir):
     return member_dirs, ensemble_repeats
 
 
-# Config entries that define the input features and model architecture. They are
-# read from the trained models' run_info.yaml, the values in `config` above are only
-# used for older weights without one.
+# Config entries that define the input features, model architecture and how
+# embeddings are compared. They are read from the trained models' run_info.yaml, the
+# values in `config` above are only used for older weights without one.
 TRAINING_CONFIG_KEYS = [
     "use_difference",
     "gear_harmonics_to_include",
@@ -277,6 +283,9 @@ TRAINING_CONFIG_KEYS = [
     "model",
     "backbone",
     "model_args",
+    "similarity",
+    "center_embeddings_inference",
+    "lpnorm_embeddings_inference",
 ]
 
 
@@ -320,8 +329,93 @@ def apply_training_config(weight_dir):
     config.update(training_settings)
     print(
         f"Using settings from run_info.yaml: {training_settings['gear_harmonics_to_include']} "
-        f"harmonics, sideband block size {training_settings['gear_sideband_block_size']}."
+        f"harmonics, sideband block size {training_settings['gear_sideband_block_size']}, "
+        f"{training_settings['similarity']} similarity"
+        + (
+            ", centered"
+            if training_settings["similarity"] == "cosine"
+            and training_settings["center_embeddings_inference"]
+            else ""
+        )
+        + "."
     )
+    if training_settings["similarity"] == "euclidean" and (
+        training_settings["center_embeddings_inference"]
+        or training_settings["lpnorm_embeddings_inference"]
+    ):
+        print(
+            "WARNING: centering/L2-normalization at inference is ignored for euclidean "
+            "similarity, unlike in the evaluation during training."
+        )
+
+
+def vote(ensemble_distances):
+    """
+    Combine the ensemble members' distances, (n_queries, n_prototypes, n_members),
+    into one predicted prototype index per query.
+
+    Soft: prototype with the lowest distance averaged over members.
+    Hard: prototype predicted by the most members. Ties (e.g. 1-1-1 with 3 members
+        and 3 classes) go to the tied prototype with the lowest average distance,
+        instead of always the first prototype (healthy).
+    """
+    mean_distances = np.mean(ensemble_distances, axis=-1)
+
+    if VOTING_TYPE == "soft":
+        return np.argmin(mean_distances, axis=1)
+    elif VOTING_TYPE == "hard":
+        n_queries, n_prototypes, _ = ensemble_distances.shape
+        # (n_queries, n_members), each member's prediction
+        member_predictions = np.argmin(ensemble_distances, axis=1)
+        # (n_queries, n_prototypes), number of members voting for each prototype
+        vote_counts = np.stack(
+            [np.bincount(p, minlength=n_prototypes) for p in member_predictions]
+        )
+        # Only prototypes with the most votes can win, ties broken by distance
+        is_winner = vote_counts == vote_counts.max(axis=1, keepdims=True)
+        return np.argmin(np.where(is_winner, mean_distances, np.inf), axis=1)
+    else:
+        raise ValueError(f"Unknown VOTING_TYPE '{VOTING_TYPE}', use 'soft' or 'hard'")
+
+
+def prototype_distances(query_embs, prototypes):
+    """
+    Distance of every query to every prototype, (n_queries, n_prototypes), lower is
+    closer. Prototypes are means of raw embeddings, as in training.
+
+    Euclidean: plain distance between the raw embeddings.
+    Cosine: same as Embedding.predict in training, i.e. optionally center both on the
+        mean of the prototypes, L2-normalize both and compare with cosine similarity.
+        Returned as cosine distance (1 - similarity), so that soft voting and argmin
+        work the same way as for euclidean.
+    """
+    if config["similarity"] == "euclidean":
+        return np.stack(
+            [
+                np.linalg.norm(query_embs - prototype[np.newaxis, :], axis=1)
+                for prototype in prototypes
+            ],
+            axis=1,
+        )
+    elif config["similarity"] == "cosine":
+        prototypes = np.stack(prototypes)
+
+        if config["center_embeddings_inference"]:
+            mean = np.mean(prototypes, axis=0)
+            prototypes = prototypes - mean
+            query_embs = query_embs - mean
+
+        # Same epsilon as F.normalize
+        prototypes = prototypes / np.maximum(
+            np.linalg.norm(prototypes, axis=-1, keepdims=True), 1e-12
+        )
+        query_embs = query_embs / np.maximum(
+            np.linalg.norm(query_embs, axis=-1, keepdims=True), 1e-12
+        )
+
+        return 1 - query_embs @ prototypes.T
+    else:
+        raise ValueError(f"Unknown similarity type '{config['similarity']}'!")
 
 
 # UNSW
@@ -519,46 +613,18 @@ def run_UNSW(model, weight_dir):
 
                         query_embs = query_df[["x", "y"]].to_numpy()
 
-                        # XXX
-                        # Center embeddings
-                        # proto_mean = np.mean(
-                        #     [healthy_prototype_H1, crack_prototype], axis=0
-                        # )
-                        # healthy_prototype_H1 -= proto_mean
-                        # crack_prototype -= proto_mean
-                        # query_embs -= proto_mean
-
-                        # # L2-norm embeddings
-                        # healthy_prototype_H1 /= np.linalg.norm(healthy_prototype_H1)
-                        # crack_prototype /= np.linalg.norm(crack_prototype)
-                        # query_embs /= np.linalg.norm(query_embs, axis=1, keepdims=True)
-                        # XXX
-
                         # Calculate query distances to prototypes
                         #   H1 always used as healthy prototype
                         #   M & L crack severities used both ways
-                        distances = np.stack(
-                            [
-                                np.linalg.norm(
-                                    query_embs - healthy_prototype_H1[np.newaxis, :],
-                                    axis=1,
-                                ),
-                                np.linalg.norm(
-                                    query_embs - crack_prototype[np.newaxis, :], axis=1
-                                ),
-                            ],
-                            axis=1,
+                        distances = prototype_distances(
+                            query_embs, [healthy_prototype_H1, crack_prototype]
                         )
 
                         ensemble_distances.append(distances)
 
                     ensemble_distances = np.stack(ensemble_distances, axis=-1)
-                    # Soft voting
-                    voted_distances = np.mean(ensemble_distances, axis=-1)
-                    acc = np.mean(np.argmin(voted_distances, axis=1) == targets)
-                    # Hard voting
-                    # voted_targets, _ = mode(np.argmin(ensemble_distances, axis=1), axis=1)
-                    # acc = np.mean(voted_targets == targets)
+                    # Combine ensemble members (soft or hard voting)
+                    acc = np.mean(vote(ensemble_distances) == targets)
 
                     UNSW_accuracies.append([acc])
                     print(
@@ -828,31 +894,15 @@ def run_MCC5(model, weight_dir):
                         )
                         query_embs = query_df[["x", "y"]].to_numpy()
 
-                        # Perform query_embs - healthy_prototype_H1
-                        distances = np.stack(
-                            [
-                                np.linalg.norm(
-                                    query_embs - healthy_prototype_H1[np.newaxis, :],
-                                    axis=1,
-                                ),
-                                np.linalg.norm(
-                                    query_embs - crack_prototype[np.newaxis, :], axis=1
-                                ),
-                                np.linalg.norm(
-                                    query_embs - wear_prototype[np.newaxis, :], axis=1
-                                ),
-                            ],
-                            axis=1,
+                        distances = prototype_distances(
+                            query_embs,
+                            [healthy_prototype_H1, crack_prototype, wear_prototype],
                         )
                         ensemble_distances.append(distances)
 
                     ensemble_distances = np.stack(ensemble_distances, axis=-1)
-                    # Soft voting
-                    voted_distances = np.mean(ensemble_distances, axis=-1)
-                    acc = np.mean(np.argmin(voted_distances, axis=1) == targets)
-                    # Hard voting
-                    # voted_targets, _ = mode(np.argmin(ensemble_distances, axis=1), axis=1)
-                    # acc = np.mean(voted_targets == targets)
+                    # Combine ensemble members (soft or hard voting)
+                    acc = np.mean(vote(ensemble_distances) == targets)
 
                     MCC5_accuracies.append(acc)
                     print(
@@ -1163,35 +1213,16 @@ def run_AGFD(model, weight_dir):
 
                             query_embs = query_df[["x", "y"]].to_numpy()
 
-                            distances = np.stack(
-                                [
-                                    np.linalg.norm(
-                                        query_embs
-                                        - healthy_prototype_H1[np.newaxis, :],
-                                        # query_embs - healthy_prototype_H2[np.newaxis, :],
-                                        axis=1,
-                                    ),
-                                    np.linalg.norm(
-                                        query_embs - crack_prototype[np.newaxis, :],
-                                        axis=1,
-                                    ),
-                                    np.linalg.norm(
-                                        query_embs - wear_prototype[np.newaxis, :],
-                                        axis=1,
-                                    ),
-                                ],
-                                axis=1,
+                            distances = prototype_distances(
+                                query_embs,
+                                [healthy_prototype_H1, crack_prototype, wear_prototype],
                             )
 
                             ensemble_distances.append(distances)
 
                         ensemble_distances = np.stack(ensemble_distances, axis=-1)
-                        # Soft voting
-                        voted_distances = np.mean(ensemble_distances, axis=-1)
-                        acc = np.mean(np.argmin(voted_distances, axis=1) == targets)
-                        # Hard voting
-                        # voted_targets, _ = mode(np.argmin(ensemble_distances, axis=1), axis=1)
-                        # acc = np.mean(voted_targets == targets)
+                        # Combine ensemble members (soft or hard voting)
+                        acc = np.mean(vote(ensemble_distances) == targets)
 
                         AGFD_accuracies.append(acc)
                         # print(
@@ -1243,6 +1274,10 @@ def parse_args():
 
 def evaluate(weight_dir, dataset):
     """Test the ensembles in `weight_dir` on `dataset`, returns each ensemble's accuracy."""
+    if VOTING_TYPE not in ("soft", "hard"):
+        raise ValueError(f"Unknown VOTING_TYPE '{VOTING_TYPE}', use 'soft' or 'hard'")
+    print(f"Voting: {VOTING_TYPE}")
+
     apply_training_config(weight_dir)
 
     model = setup_model(config, device)
