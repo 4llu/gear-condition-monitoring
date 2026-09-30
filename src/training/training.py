@@ -9,7 +9,6 @@ import torch
 from pytorch_metric_learning.utils.accuracy_calculator import AccuracyCalculator
 from ruamel.yaml import YAML
 from torch.utils.tensorboard import SummaryWriter
-from zclip import ZClip
 
 from src.models.models import setup_model
 from src.training.utils import fix_embedding_labels
@@ -21,6 +20,7 @@ log = logging.getLogger("gear-cm")
 
 
 def _get_grad_norm(model):
+    """Total L2 norm of all gradients, same as what clip_grad_norm_ clips against."""
     total_norm = 0
     for p in model.parameters():
         if p.grad is not None:
@@ -28,18 +28,6 @@ def _get_grad_norm(model):
             total_norm += param_norm.item() ** 2
     total_norm = total_norm ** (1.0 / 2)
     return total_norm
-
-
-class autoclip_gradient:
-    def __init__(self, clip_percentile=95):
-        self.clip_percentile = clip_percentile
-        self.grad_history = []
-
-    def __call__(self, model):
-        obs_grad_norm = _get_grad_norm(model)
-        self.grad_history.append(obs_grad_norm)
-        clip_value = np.percentile(self.grad_history, self.clip_percentile)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_value)
 
 
 def _get_git_state():
@@ -116,9 +104,6 @@ def run_single_training(
         betas=[config["momentum"], config["b2"]],
     )
 
-    # Initialize ZClip
-    zclip = ZClip(alpha=0.97, z_thresh=2.5)
-    # auto_clip = autoclip_gradient(clip_percentile=10)
 
     # Learning rate scheduler
     # TODO: Cosine annealing with warm restarts?
@@ -272,9 +257,6 @@ def run_single_training(
                     )
                 )
                 loss.backward()
-                zclip.step(model)  # XXX
-                # auto_clip(model)  # XXX
-                # HERE: Try the other clipping method https://github.com/pseeth/autoclip/blob/master/autoclip.py
                 full_loss += loss.item()
                 # YYY
 
@@ -332,13 +314,30 @@ def run_single_training(
         # Backward pass
         # * Skip first batch learning to get a baseline
         if batch_i != 0:
-            # Gradient clipping
+            # Gradient clipping (of the whole batch's accumulated gradient)
+            # * clip_grad_norm_ returns the total norm before clipping
             if config["gradient_clip"] > 0:
-                torch.nn.utils.clip_grad_norm_(
+                grad_norm_before_clip = torch.nn.utils.clip_grad_norm_(
                     model.parameters(),
                     max_norm=config["gradient_clip"],
                     norm_type=2,
                 )
+            else:
+                grad_norm_before_clip = None
+
+            # Same cadence as the training loss logging
+            if TB_writer and (
+                batch_i % 5 == 0 or batch_i == config["max_batches"] - 1
+            ):
+                # Norm of the gradient actually used for the update
+                grad_norm = _get_grad_norm(model)
+                if grad_norm_before_clip is None:
+                    # No clipping, so the norm is unchanged
+                    grad_norm_before_clip = grad_norm
+                TB_writer.add_scalar(
+                    "train/grad_norm_before_clip", grad_norm_before_clip, batch_i
+                )
+                TB_writer.add_scalar("train/grad_norm", grad_norm, batch_i)
 
             # Backpropagation and weight update
             # print(">> Step")
