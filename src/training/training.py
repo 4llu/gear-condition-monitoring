@@ -15,6 +15,14 @@ from src.training.utils import fix_embedding_labels
 
 log = logging.getLogger("gear-cm")
 
+# Weights are saved every CHECKPOINT_INTERVAL batches as 0.pth, 1.pth, ...
+CHECKPOINT_INTERVAL = 100
+
+
+def last_checkpoint_num(max_batches):
+    """Number of the last checkpoint a training with `max_batches` batches saves."""
+    return (max_batches - 1) // CHECKPOINT_INTERVAL
+
 # HELPERS
 #########
 
@@ -304,7 +312,7 @@ def run_single_training(
                 #             "grad/" + tag, value.grad.cpu(), batch_i
                 #         )
 
-        if config["save"] and batch_i % 100 == 0:
+        if config["save"] and batch_i % CHECKPOINT_INTERVAL == 0:
             torch.save(
                 model.backbone.state_dict(),
                 run_dir / f"{checkpoint_i}.pth",

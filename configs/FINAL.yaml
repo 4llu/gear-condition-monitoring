@@ -1,14 +1,16 @@
 #? Creation
 name: FINAL
-log: true
-save: true
+log: false
+save: true # FIXME
 seed: null # * null -> random seed (still saved in run_info.yaml), --seed overrides
 
 #? Validation and testing
 validation_interval: 250 # * In batches
-validation_batches: 5
+# validation_batches: 50
+validation_batches: 5 # FOR RESULTS
 test_interval: 250
-test_batches: 5
+test_batches: 5 # FOR RESULTS
+# test_batches: 50 
 test_extra_logging_interval: 0
 
 #? Datasets
@@ -206,21 +208,17 @@ UNSW_validation_severities: [H, S, M, L]
 #? Preprocessing
 # * Order matters
 
-preprocessing_individual: [cherry_pick_indices] # FIXME
+preprocessing_individual: [cherry_pick_indices]
 preprocessing_batch: [amplitude_log10]
-# preprocessing_difference_batch: [augment_amplitude]
 preprocessing_difference_batch: [
         # permutate_blocks,
         mask_blocks_non_episodic,
         # permute_within_blocks,
         augment_amplitude,
     ]
-# preprocessing_difference_batch: [mask_blocks_non_episodic, augment_amplitude]
 
 #? Preprocessing additional arguments
 num_blocks_to_mask: 1 # Only `mask_blocks_non_episodic`
-# amplitude_augment_low: 0.5
-# amplitude_augment_high: 1.5
 amplitude_augment_low: 0.8
 amplitude_augment_high: 1.2
 # Frequency cherry picking
@@ -245,18 +243,18 @@ lpnorm_embeddings_inference: false
 # ? Remember to set intermediate_L2 to True in the model_args
 # loss: supcon
 # loss_args:
-#     temperature: 0.02
-#     # temperature: 0.08 # Canonical
+#     # temperature: 0.02
+#     temperature: 0.1 # Canonical
 # similarity: cosine # Default: cosine
-# lpnorm_embeddings_training: True # Default: True
-# center_embeddings_inference: True
-# lpnorm_embeddings_inference: True # Default: True
+# lpnorm_embeddings_training: True # Does nothing with similarity=cosine, but cosine similarity does normalization implicitly
+# center_embeddings_inference: False # Don't use this with cosine similarity, as it will break the embeddings
+# lpnorm_embeddings_inference: True # Does nothing with similarity=cosine, but cosine similarity does normalization implicitly
 
 embedding_len: 2
 backbone: MlpMixer
 model_args:
-    # intermediate_L2: True
-    intermediate_L2: False # CANONICAL
+    # intermediate_L2: True # SupCon
+    intermediate_L2: False # Triplet
     num_layers: 3
     hidden_dim: 32
     tokens_mlp_dim: 16
@@ -268,19 +266,18 @@ model_args:
 # ? Training
 
 episodes_per_dataset_per_batch: 2 # FIXME: Automatically use number of datasets in training
-max_batches: 501 # XXX
-# max_batches: 1501
-# max_batches: 501
-# warmup_batches: 0 # XXX
-warmup_batches: 100
-lr: 0.001
+max_batches: 501 # CANONICAL
+# max_batches: 2501
+warmup_batches: 100 # CANONICAL
+# warmup_batches: 10
+# warmup_batches: 0
+lr: 0.001 # CANONICAL
 # sch_gamma: 0.999 # XXX
 sch_gamma: 0.998
 momentum: 0.9
 b2: 0.999
 gradient_clip: 0 # XXX
-# gradient_clip: 0.025 # HERE: Run results XXX: Maybe this is the one?
-# gradient_clip: 2.5 
+# gradient_clip: 1.0
 
 # Regularization
 weight_decay: 0.0001

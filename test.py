@@ -10,6 +10,7 @@ from ruamel.yaml import YAML
 
 from src.data.preprocessing_individual import get_important_frequencies
 from src.models.models import setup_model
+from src.training.training import CHECKPOINT_INTERVAL
 from src.utils.init import setup_device
 
 # CONFIG
@@ -20,7 +21,8 @@ ENSEMBLE_SIZE = 3
 # How ensemble members are combined: "soft" averages the members' distances to each
 # prototype, "hard" takes a majority vote of the members' predictions
 VOTING_TYPE = "soft"
-ENSEMBLE_CHECKPOINT_NUM = 5
+ENSEMBLE_CHECKPOINT_NUM = 5  # CANONICAL TRIPLET
+# ENSEMBLE_CHECKPOINT_NUM = 25  # CANONICAL SUPCON
 
 device = setup_device(override="cpu")
 MODEL_WEIGHT_DIR = Path.cwd().resolve() / "model_weights"
@@ -253,6 +255,26 @@ def get_samples_AGFD(
     return prepare_samples(samples, AGFD_teeth)
 
 
+def check_checkpoint_available(weight_dir):
+    """Fail clearly if no ensemble member has the checkpoint ENSEMBLE_CHECKPOINT_NUM."""
+    member_dirs = [d for d in weight_dir.iterdir() if d.is_dir()]
+    if any((d / f"{ENSEMBLE_CHECKPOINT_NUM}.pth").is_file() for d in member_dirs):
+        return
+
+    available = sorted(
+        {int(p.stem) for d in member_dirs for p in d.glob("*.pth") if p.stem.isdigit()}
+    )
+    if not available:
+        raise SystemExit(f"No ensemble members with checkpoints found in {weight_dir}")
+    raise SystemExit(
+        f"No ensemble member in {weight_dir} has {ENSEMBLE_CHECKPOINT_NUM}.pth, the "
+        f"members have checkpoints {available[0]}-{available[-1]}. Set "
+        f"ENSEMBLE_CHECKPOINT_NUM in test.py to at most {available[-1]}, or train with "
+        f"max_batches > {ENSEMBLE_CHECKPOINT_NUM * CHECKPOINT_INTERVAL} (a checkpoint "
+        f"is saved every {CHECKPOINT_INTERVAL} batches)."
+    )
+
+
 def find_ensemble_members(weight_dir):
     # Only subdirectories holding the selected checkpoint count as ensemble members
     member_dirs = sorted(
@@ -368,9 +390,9 @@ def vote(ensemble_distances):
         # (n_queries, n_members), each member's prediction
         member_predictions = np.argmin(ensemble_distances, axis=1)
         # (n_queries, n_prototypes), number of members voting for each prototype
-        vote_counts = np.stack(
-            [np.bincount(p, minlength=n_prototypes) for p in member_predictions]
-        )
+        vote_counts = np.stack([
+            np.bincount(p, minlength=n_prototypes) for p in member_predictions
+        ])
         # Only prototypes with the most votes can win, ties broken by distance
         is_winner = vote_counts == vote_counts.max(axis=1, keepdims=True)
         return np.argmin(np.where(is_winner, mean_distances, np.inf), axis=1)
@@ -1278,6 +1300,7 @@ def evaluate(weight_dir, dataset):
         raise ValueError(f"Unknown VOTING_TYPE '{VOTING_TYPE}', use 'soft' or 'hard'")
     print(f"Voting: {VOTING_TYPE}")
 
+    check_checkpoint_available(weight_dir)
     apply_training_config(weight_dir)
 
     model = setup_model(config, device)

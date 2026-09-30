@@ -8,6 +8,7 @@ import numpy as np
 import test
 from src.utils.init import setup_config, setup_device
 from src.utils.logging import setup_logging
+from src.training.training import CHECKPOINT_INTERVAL, last_checkpoint_num
 from train_repeated import train_ensemble
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
@@ -85,6 +86,18 @@ def main():
     device = setup_device(override="cpu")
     training_config = setup_config(args.config)
     log = setup_logging(log_to_file=training_config["log"])
+
+    # Check before training that the trainings will save the checkpoint test.py loads
+    last_checkpoint = last_checkpoint_num(training_config["max_batches"])
+    if test.ENSEMBLE_CHECKPOINT_NUM > last_checkpoint:
+        raise SystemExit(
+            f"test.py loads checkpoint {test.ENSEMBLE_CHECKPOINT_NUM}.pth, but with "
+            f"max_batches: {training_config['max_batches']} in {args.config}.yaml the "
+            f"last checkpoint saved is {last_checkpoint}.pth (one every "
+            f"{CHECKPOINT_INTERVAL} batches). Set ENSEMBLE_CHECKPOINT_NUM in test.py to "
+            f"at most {last_checkpoint}, or max_batches to more than "
+            f"{test.ENSEMBLE_CHECKPOINT_NUM * CHECKPOINT_INTERVAL}."
+        )
 
     # test.py reads its ensemble size from this module level setting
     test.ENSEMBLE_SIZE = args.ensemble_size
