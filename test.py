@@ -266,9 +266,9 @@ def check_checkpoint_available(weight_dir):
     if any((d / f"{ENSEMBLE_CHECKPOINT_NUM}.pth").is_file() for d in member_dirs):
         return
 
-    available = sorted(
-        {int(p.stem) for d in member_dirs for p in d.glob("*.pth") if p.stem.isdigit()}
-    )
+    available = sorted({
+        int(p.stem) for d in member_dirs for p in d.glob("*.pth") if p.stem.isdigit()
+    })
     if not available:
         raise SystemExit(f"No ensemble members with checkpoints found in {weight_dir}")
     raise SystemExit(
@@ -1246,18 +1246,16 @@ def run_AGFD(model, weight_dir):
                         acc = np.mean(vote(ensemble_distances) == targets)
 
                         AGFD_accuracies.append(acc)
-                        # print(
-                        #     f"{speed:<4} RPM, {load/100:3.0%}, s_inst. {support_installation}, q_inst. {query_installation}: \033[95m{acc:>10.2%}\033[0m ({severity})"
-                        # )
-                        # print(
-                        #     "  ",
-                        #     ", ".join(
-                        #         [
-                        #             f"{np.mean(np.argmin(ensemble_distances[:, :, i], axis=1) == targets):.1%}"
-                        #             for i in range(ensemble_size)
-                        #         ]
-                        #     ),
-                        # )
+                        print(
+                            f"{speed:<4} RPM, load {load:<2}: \033[95m{acc:>10.2%}\033[0m (installation {support_installation} -> {query_installation})"
+                        )
+                        print(
+                            "  ",
+                            ", ".join([
+                                f"{np.mean(np.argmin(ensemble_distances[:, :, i], axis=1) == targets):.1%}"
+                                for i in range(ENSEMBLE_SIZE)
+                            ]),
+                        )
 
         print(f"AGFD average accuracy: \033[92m{np.mean(AGFD_accuracies):.4%}\033[0m")
         all_accuracies.append(np.mean(AGFD_accuracies))

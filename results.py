@@ -16,7 +16,7 @@ RESULTS_DIR = Path(__file__).resolve().parent / "results"
 # Training datasets -> left out dataset used for testing
 SCENARIOS = {
     "ALL_UM": "AGFD",
-    "ALL_UA": "MCC5",
+    # "ALL_UA": "MCC5",
     "ALL_MA": "UNSW",
 }
 
@@ -117,9 +117,7 @@ def main():
             for train_datasets, test_dataset in SCENARIOS.items():
                 log.info("")
                 log.info("####")
-                log.info(
-                    f"# SEED {seed}: train {train_datasets}, test {test_dataset}"
-                )
+                log.info(f"# SEED {seed}: train {train_datasets}, test {test_dataset}")
                 log.info("####")
 
                 # Fresh config for every training, so nothing leaks between them
@@ -138,10 +136,16 @@ def main():
                     "weight_dir": weight_dir.name,
                 }
                 for ensemble_i, accuracy in enumerate(accuracies, start=1):
-                    writer.writerow({**row, "ensemble": ensemble_i, "accuracy": accuracy})
-                writer.writerow(
-                    {**row, "ensemble": "mean", "accuracy": np.mean(accuracies)}
-                )
+                    writer.writerow({
+                        **row,
+                        "ensemble": ensemble_i,
+                        "accuracy": accuracy,
+                    })
+                writer.writerow({
+                    **row,
+                    "ensemble": "mean",
+                    "accuracy": np.mean(accuracies),
+                })
                 # Keep results of finished trainings if a later one fails
                 stream.flush()
 

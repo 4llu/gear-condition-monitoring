@@ -73,6 +73,7 @@ UNSW_train_speeds: [5, 10, 15, 20]
 # UNSW_train_speeds: [5, 15, 20] # FIXME
 UNSW_train_loads: [5, 10, 15, 20]
 # UNSW_train_loads: [5, 10] # FIXME
+UNSW_train_excluded_conditions: [[10, 5]] # [speed, load] pairs left out of training (ALL_* only)
 UNSW_train_classes: [healthy, crack]
 UNSW_train_severities: [H, S, M, L]
 
@@ -231,14 +232,16 @@ model: embedding
 
 loss: triplet
 loss_args:
-    # margin: 2.0
-    margin: 1.4
+    margin: 1.4 # OLD
+    # margin: 0.5
     miner: True
     miner_type: all
 similarity: euclidean
-lpnorm_embeddings_training: false
+# lpnorm_embeddings_training: false
+lpnorm_embeddings_training: true
 center_embeddings_inference: false
 lpnorm_embeddings_inference: false
+# lpnorm_embeddings_inference: true
 
 # ? Remember to set intermediate_L2 to True in the model_args
 # loss: supcon
