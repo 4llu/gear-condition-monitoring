@@ -16,8 +16,11 @@ RESULTS_DIR = Path(__file__).resolve().parent / "results"
 # Training datasets -> left out dataset used for testing
 SCENARIOS = {
     "ALL_UM": "AGFD",
-    # "ALL_UA": "MCC5",
+    "ALL_UA": "MCC5",
     "ALL_MA": "UNSW",
+    "ALL_U": "AGFD",
+    "ALL_M": "AGFD",
+    "ALL_A": "UNSW",
 }
 
 CSV_COLUMNS = [
