@@ -98,6 +98,10 @@ UNSW_teeth = 27
 AGFD_teeth = 15
 MCC5_teeth = 36
 
+UNSW_ANCHOR_NUM = 16
+MCC5_ANCHOR_NUM = 7
+AGFD_ANCHOR_NUM = 16
+
 # HELPERS
 ###
 
@@ -445,6 +449,7 @@ def prototype_distances(query_embs, prototypes):
 
 def load_UNSW():
     UNSW_crack_df = pd.read_feather(
+        # Path.cwd() / "data" / "UNSW_V6.feather"
         Path.cwd() / "data" / "UNSW_gear_crack_OT_V2.feather"
     )
 
@@ -503,7 +508,7 @@ def run_UNSW(model, weight_dir):
                         # * 16 from each to have consistent number of anchor samples.
                         anchor_samples = get_samples_UNSW(
                             UNSW_crack_df, speed, load, "H1"
-                        )[:16]
+                        )[:UNSW_ANCHOR_NUM]
 
                         anchor_samples = reduce(anchor_samples, "b w -> 1 w", "mean")
                         # anchor_samples = rearrange(anchor_samples, "(a b) w -> a b w", a=4, b=4)
@@ -515,7 +520,7 @@ def run_UNSW(model, weight_dir):
                     # * Drop 16 first from H1, as those are used for anchors
                     healthy_samples_1 = get_samples_UNSW(
                         UNSW_crack_df, speed, load, "H1"
-                    )[16:]
+                    )[UNSW_ANCHOR_NUM:]
                     healthy_emb_df_1 = embed_wrapper(
                         healthy_samples_1,
                         anchor_samples,
@@ -672,6 +677,7 @@ def run_UNSW(model, weight_dir):
 
 
 def load_MCC5():
+    # MCC5_df = pd.read_feather(Path.cwd() / "data" / "MCC5_V6.feather")  # XXX
     MCC5_df = pd.read_feather(Path.cwd() / "data" / "MCC5-THU_OT_V3.feather")  # XXX
 
     # Need only one OT method
@@ -743,7 +749,7 @@ def run_MCC5(model, weight_dir):
                         # * 7 from each to have consistent number of anchor samples.
                         anchor_samples = get_samples_MCC5(
                             MCC5_df, speed, load, "healthy", "-", circulation="torque"
-                        )[:7]
+                        )[:MCC5_ANCHOR_NUM]
 
                         anchor_samples = reduce(anchor_samples, "b w -> 1 w", "mean")
                         # anchor_samples = rearrange(anchor_samples, "(a b) w -> a b w", a=4, b=4)
@@ -756,7 +762,7 @@ def run_MCC5(model, weight_dir):
                     # * Drop 7 first from H1, as those are used for anchors
                     healthy_samples_1 = get_samples_MCC5(
                         MCC5_df, speed, load, "healthy", "-", circulation="torque"
-                    )[7:]
+                    )[MCC5_ANCHOR_NUM:]
                     healthy_emb_df_1 = embed_wrapper(
                         healthy_samples_1,
                         anchor_samples,
@@ -950,6 +956,7 @@ def run_MCC5(model, weight_dir):
 
 
 def load_AGFD():
+    # AGFD_df = pd.read_feather(Path.cwd() / "data" / "AGFD_V6.feather")
     AGFD_df = pd.read_feather(Path.cwd() / "data" / "AGFD_OT_V2.feather")
 
     # Need only one OT method
@@ -1007,7 +1014,7 @@ def run_AGFD(model, weight_dir):
                         # * 16 should be enough
                         anchor_samples = get_samples_AGFD(
                             AGFD_df, speed, load, "healthy", "-", healthy_GP=4
-                        )[:16]
+                        )  # [:AGFD_ANCHOR_NUM]
 
                         anchor_samples = reduce(anchor_samples, "b w -> 1 w", "mean")
                         # anchor_samples = rearrange(anchor_samples, "(a b) w -> a b w", a=4, b=4)
@@ -1020,7 +1027,7 @@ def run_AGFD(model, weight_dir):
                     # * Drop 16 first from H1, as those are used for anchors
                     healthy_samples_1 = get_samples_AGFD(
                         AGFD_df, speed, load, "healthy", "-", healthy_GP=5
-                    )[16:]
+                    )  # [AGFD_ANCHOR_NUM:]
 
                     healthy_emb_df_1 = embed_wrapper(
                         healthy_samples_1,
@@ -1038,7 +1045,12 @@ def run_AGFD(model, weight_dir):
 
                     # Get samples from specific conditions
                     healthy_samples_2 = get_samples_AGFD(
-                        AGFD_df, speed, load, "healthy", "-", healthy_GP=9
+                        AGFD_df,
+                        speed,
+                        load,
+                        "healthy",
+                        "-",
+                        healthy_GP=5,
                     )
                     healthy_emb_df_2 = embed_wrapper(
                         healthy_samples_2,
@@ -1215,6 +1227,7 @@ def run_AGFD(model, weight_dir):
                                 round_df[
                                     (round_df["class"] == "wear")
                                     & (round_df["severity"] == "L")
+                                    & (round_df["installation"] == support_installation)
                                 ][embedding_columns()]
                                 .to_numpy()
                                 .mean(axis=0)
@@ -1222,7 +1235,18 @@ def run_AGFD(model, weight_dir):
 
                             query_df = round_df[
                                 (round_df["installation"].isin([0, query_installation]))
-                                & (round_df["severity"].isin(["H1", "M", "L"]))
+                                # & (round_df["severity"].isin(["H2", "S", "L"]))
+                                & (
+                                    (round_df["severity"] == "H2")
+                                    | (
+                                        (round_df["severity"] == "L")
+                                        & (round_df["class"] == "crack")
+                                    )
+                                    | (
+                                        (round_df["severity"] == "L")
+                                        & (round_df["class"] == "wear")
+                                    )
+                                )
                             ]
 
                             # Convert severities to target labels [0, 1, 2]
@@ -1236,7 +1260,11 @@ def run_AGFD(model, weight_dir):
 
                             distances = prototype_distances(
                                 query_embs,
-                                [healthy_prototype_H1, crack_prototype, wear_prototype],
+                                [
+                                    healthy_prototype_H1,
+                                    crack_prototype,
+                                    wear_prototype,
+                                ],
                             )
 
                             ensemble_distances.append(distances)

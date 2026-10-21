@@ -14,7 +14,7 @@ log = logging.getLogger("gear-cm")
 def get_arguments():
     # Init arguments
     parser = ArgumentParser()
-    parser.add_argument(f"--config", default="base", type=str)
+    parser.add_argument("--config", default="FINAL", type=str)
     parser.add_argument(
         "--seed", default=None, type=int, help="Overrides the config's seed"
     )
@@ -37,7 +37,6 @@ def setup_config(config_name, config_override_name=None):
 
     # Use override config if specified
     if not config_override_name is None:
-
         # Read override config
         config_override = None
         override_path = config_dir / (config_override_name + ".yaml")

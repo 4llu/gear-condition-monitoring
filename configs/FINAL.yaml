@@ -73,7 +73,8 @@ UNSW_train_speeds: [5, 10, 15, 20]
 # UNSW_train_speeds: [5, 15, 20] # FIXME
 UNSW_train_loads: [5, 10, 15, 20]
 # UNSW_train_loads: [5, 10] # FIXME
-UNSW_train_excluded_conditions: [[10, 5]] # [speed, load] pairs left out of training (ALL_* only)
+# UNSW_train_excluded_conditions: [[10, 5]] # [speed, load] pairs left out of training (ALL_* only)
+UNSW_train_excluded_conditions: []
 UNSW_train_classes: [healthy, crack]
 UNSW_train_severities: [H, S, M, L]
 
@@ -101,6 +102,7 @@ MCC5_train_speeds: [1000, 1500, 2000, 2500, 3000]
 MCC5_train_loads: [5, 10, 15, 20]
 MCC5_train_classes: [healthy, crack, wear]
 MCC5_train_severities: [M, L]
+# MCC5_train_severities: [M, L, XL]
 
 #* MCC5-THU [ALL] [TEST]
 ##
@@ -129,7 +131,8 @@ AGFD_train_installations: [1, 2, 3]
 AGFD_train_healthy_GPs: [2, 3, 4, 5, 6, 9] # 1 & 7 not good, 8 doesn't exist # XXX: Drop 2 and 6?
 AGFD_train_classes: [healthy, crack, wear]
 AGFD_train_severities: [S, L]
-AGFD_train_include_large_crack: false
+AGFD_train_include_large_crack: true
+# AGFD_train_include_large_crack: false
 AGFD_train_include_small_wear: false
 
 #* AGFD [ALL] (TEST)
@@ -232,8 +235,7 @@ model: embedding
 
 loss: triplet
 loss_args:
-    margin: 1.4 # OLD
-    # margin: 0.5
+    margin: 1.4
     miner: True
     miner_type: all
 similarity: euclidean
@@ -269,8 +271,8 @@ model_args:
 # ? Training
 
 episodes_per_dataset_per_batch: 2 # FIXME: Automatically use number of datasets in training
-max_batches: 501 # CANONICAL
-# max_batches: 2501
+# max_batches: 501 # CANONICAL
+max_batches: 1001
 warmup_batches: 100 # CANONICAL
 # warmup_batches: 10
 # warmup_batches: 0

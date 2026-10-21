@@ -94,12 +94,21 @@ class ALL_BatchSampler(BatchSampler):
             print(f"Batch options MCC5: {len(self.MCC5_options)}")  # 22
 
         if self.UNSW_included:
-            self.UNSW_options = list(
-                itertools.product(
+            # [speed, load] pairs to leave out, e.g. UNSW_train_excluded_conditions
+            excluded_UNSW_options = {
+                tuple(condition)
+                for condition in self.config.get(
+                    f"{self.config_prefix_UNSW}excluded_conditions", []
+                )
+            }
+            self.UNSW_options = [
+                option
+                for option in itertools.product(
                     self.config[f"{self.config_prefix_UNSW}speeds"],
                     self.config[f"{self.config_prefix_UNSW}loads"],
                 )
-            )
+                if option not in excluded_UNSW_options
+            ]
             print(f"Batch options UNSW: {len(self.UNSW_options)}")  # 12
 
         if self.ASD_included:
@@ -675,6 +684,7 @@ def get_ALL_data(
         df_AGFD = pd.read_feather(
             Path(__file__).resolve().parent.parent.parent
             / "data"
+            # / "AGFD_V6.feather"  # XXX
             / "AGFD_OT_V2.feather"
         )
 
@@ -737,8 +747,12 @@ def get_ALL_data(
             Path(__file__).resolve().parent.parent.parent
             / "data"
             / "MCC5-THU_OT_V3.feather"
-            # / "MCC5-THU_OT_V2.feather"
+            # / "MCC5_V6.feather"  # XXX
         )
+
+        missing_tooth = df_MCC5["class"] == "missing_tooth"
+        df_MCC5.loc[missing_tooth, "class"] = "crack"
+        df_MCC5.loc[missing_tooth, "severity"] = "XL"
 
         df_MCC5 = df_MCC5[
             df_MCC5["speed"].isin(config[f"{config_prefix_MCC5}speeds"])
@@ -758,6 +772,7 @@ def get_ALL_data(
             Path(__file__).resolve().parent.parent.parent
             / "data"
             / "UNSW_gear_crack_OT_V2.feather"
+            # / "UNSW_V6.feather"  # XXX
         )
 
         df_UNSW = df_UNSW[

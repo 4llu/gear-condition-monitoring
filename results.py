@@ -6,9 +6,9 @@ from pathlib import Path
 import numpy as np
 
 import test
+from src.training.training import CHECKPOINT_INTERVAL, last_checkpoint_num
 from src.utils.init import setup_config, setup_device
 from src.utils.logging import setup_logging
-from src.training.training import CHECKPOINT_INTERVAL, last_checkpoint_num
 from train_repeated import train_ensemble
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
@@ -16,11 +16,11 @@ RESULTS_DIR = Path(__file__).resolve().parent / "results"
 # Training datasets -> left out dataset used for testing
 SCENARIOS = {
     "ALL_UM": "AGFD",
-    "ALL_UA": "MCC5",
+    # "ALL_UA": "MCC5",
     "ALL_MA": "UNSW",
-    "ALL_U": "AGFD",
-    "ALL_M": "AGFD",
-    "ALL_A": "UNSW",
+    # "ALL_U": "AGFD",
+    # "ALL_M": "AGFD",
+    # "ALL_A": "UNSW",
 }
 
 CSV_COLUMNS = [

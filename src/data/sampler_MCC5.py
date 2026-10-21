@@ -436,6 +436,11 @@ def get_MCC5_data(split, rng, config, device):
         # dfs.append(pd.read_feather(data_path))
     data = pd.concat(dfs, ignore_index=True)
 
+    # XXX
+    missing_tooth = data["class"] == "missing_tooth"
+    data.loc[missing_tooth, "class"] = "crack"
+    data.loc[missing_tooth, "severity"] = "XL"
+
     data = data[
         data["speed"].isin(config[f"{config_prefix}speeds"])
         & (data["load"].isin(config[f"{config_prefix}loads"]))
