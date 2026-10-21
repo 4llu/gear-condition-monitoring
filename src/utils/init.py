@@ -25,26 +25,12 @@ def get_arguments():
     return args
 
 
-def setup_config(config_name, config_override_name=None):
+def setup_config(config_name):
     config_dir = Path(__file__).resolve().parent.parent.parent / "configs"
     yaml = YAML()
 
-    # Read config
-    config = None
-    config_path = config_dir / (config_name + ".yaml")
-    with open(config_path) as stream:
+    with open(config_dir / (config_name + ".yaml")) as stream:
         config = yaml.load(stream)
-
-    # Use override config if specified
-    if not config_override_name is None:
-        # Read override config
-        config_override = None
-        override_path = config_dir / (config_override_name + ".yaml")
-        with open(override_path) as stream:
-            config_override = yaml.load(stream)
-
-        # Update config with values from override
-        config.update(config_override)
 
     return dict(config)
 
@@ -82,7 +68,6 @@ def setup_device(override=None):
             torch.set_float32_matmul_precision("high")
         elif torch.backends.mps.is_built():
             device_type = "mps"
-            # device_type = "cpu"
 
         device = torch.device(device_type)
     else:

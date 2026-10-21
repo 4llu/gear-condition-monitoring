@@ -3,18 +3,6 @@ from einops.layers.torch import Rearrange, Reduce
 from einops import rearrange
 
 
-class Normalize(nn.Module):
-    def __init__(self, p=2, dim=-1):
-        super(Normalize, self).__init__()
-        self.normalize = nn.functional.normalize
-        self.p = p
-        self.dim = dim
-
-    def forward(self, x):
-        x = self.normalize(x, p=self.p, dim=self.dim)
-        return x
-
-
 class MlpBlock(nn.Module):
     def __init__(self, dim, hidden_dim, dropout):
         super().__init__()
@@ -87,25 +75,11 @@ class MlpMixer(nn.Module):
         self.features = nn.Sequential(*blocks)
 
         # Classification/embedding head
-        self.head = [
+        self.head = nn.Sequential(
             nn.LayerNorm(self.hidden_dim),
             Reduce("b s c -> b c", reduction="mean"),  # GlobalAvgPool over patches
-        ]
-        # NOTE: Only for SupCon
-        if config["model_args"]["intermediate_L2"]:
-            self.head.append(Normalize(p=2, dim=-1))
-
-        self.head = nn.Sequential(
-            *self.head,
-            # nn.Linear(self.hidden_dim, 24, bias=False),
-            # nn.GELU(),
             nn.Linear(self.hidden_dim, config["embedding_len"], bias=False),
         )
-        # self.head = nn.Sequential(
-        #     nn.LayerNorm(self.hidden_dim),
-        #     Reduce("b s c -> b c", reduction="mean"),  # GlobalAvgPool over patches
-        #     nn.Linear(self.hidden_dim, config["embedding_len"], bias=False),
-        # )
 
     def forward(self, x):
         # Input shape: (batch_size, input_len)
@@ -122,9 +96,6 @@ class MlpMixer(nn.Module):
         # Blocks
         # (batch_size, num_patch, hidden_dim)
         x = self.features(x)
-
-        # NOTE: Only use for SupCon
-        # x = nn.functional.normalize(x, p=2, dim=-1)
 
         # Classification/embedding head
         # (batch_size, embedding_len)

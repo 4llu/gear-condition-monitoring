@@ -46,7 +46,6 @@ def main():
     # Determine device
     # Override if necessary
     device = setup_device(override="cpu")
-    # device = setup_device()
 
     log.info("")
     log.info("")
@@ -64,7 +63,7 @@ def main():
     ####################
 
     # Initialize data
-    train_loaders, validation_loader, test_loader = setup_data(
+    train_loaders, validation_loader = setup_data(
         config, device, seed=seed
     )
 
@@ -72,7 +71,6 @@ def main():
     run_single_training(
         train_loaders,
         validation_loader,
-        test_loader,
         config,
         device,
     )

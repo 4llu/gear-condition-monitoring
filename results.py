@@ -1,4 +1,5 @@
 import csv
+import json
 from argparse import ArgumentParser
 from datetime import datetime
 from pathlib import Path
@@ -16,11 +17,8 @@ RESULTS_DIR = Path(__file__).resolve().parent / "results"
 # Training datasets -> left out dataset used for testing
 SCENARIOS = {
     "ALL_UM": "AGFD",
-    # "ALL_UA": "MCC5",
+    "ALL_UA": "MCC5",
     "ALL_MA": "UNSW",
-    # "ALL_U": "AGFD",
-    # "ALL_M": "AGFD",
-    # "ALL_A": "UNSW",
 }
 
 CSV_COLUMNS = [
@@ -65,6 +63,27 @@ def parse_args():
         help=f"Models per ensemble when testing (default: test.py's {test.ENSEMBLE_SIZE}).",
     )
     parser.add_argument(
+        "--scenarios",
+        nargs="+",
+        choices=list(SCENARIOS),
+        default=list(SCENARIOS),
+        help="Training dataset combinations to run (default: all).",
+    )
+    parser.add_argument(
+        "--override",
+        type=json.loads,
+        default={},
+        help=(
+            "JSON object of config entries to override for every training, e.g. "
+            '\'{"embedding_len": 8}\'. Stored in each run\'s run_info.yaml.'
+        ),
+    )
+    parser.add_argument(
+        "--all-sensors",
+        action="store_true",
+        help="Test with all sensors of the held-out dataset voting (default: training sensor only).",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=None,
@@ -102,6 +121,9 @@ def main():
             f"{test.ENSEMBLE_CHECKPOINT_NUM * CHECKPOINT_INTERVAL}."
         )
 
+    if args.all_sensors:
+        test.use_all_sensors()
+
     # test.py reads its ensemble size from this module level setting
     test.ENSEMBLE_SIZE = args.ensemble_size
     leftover = args.models % args.ensemble_size
@@ -117,7 +139,8 @@ def main():
         writer.writeheader()
 
         for seed in args.seeds:
-            for train_datasets, test_dataset in SCENARIOS.items():
+            for train_datasets in args.scenarios:
+                test_dataset = SCENARIOS[train_datasets]
                 log.info("")
                 log.info("####")
                 log.info(f"# SEED {seed}: train {train_datasets}, test {test_dataset}")
@@ -125,6 +148,7 @@ def main():
 
                 # Fresh config for every training, so nothing leaks between them
                 config = setup_config(args.config)
+                config.update(args.override)
                 config["train_datasets"] = [train_datasets]
 
                 weight_dir = train_ensemble(config, args.models, seed, device, log)

@@ -1,4 +1,5 @@
 import argparse
+import itertools
 from pathlib import Path
 
 import numpy as np
@@ -21,8 +22,7 @@ ENSEMBLE_SIZE = 3
 # How ensemble members are combined: "soft" averages the members' distances to each
 # prototype, "hard" takes a majority vote of the members' predictions
 VOTING_TYPE = "soft"
-ENSEMBLE_CHECKPOINT_NUM = 5  # CANONICAL TRIPLET
-# ENSEMBLE_CHECKPOINT_NUM = 25  # CANONICAL SUPCON
+ENSEMBLE_CHECKPOINT_NUM = 5  # Batch 500, the last checkpoint of max_batches: 501
 
 device = setup_device(override="cpu")
 MODEL_WEIGHT_DIR = Path.cwd().resolve() / "model_weights"
@@ -30,18 +30,19 @@ MODEL_WEIGHT_DIR = Path.cwd().resolve() / "model_weights"
 LOG_EPS = 1e-12
 
 embedding_specs = {
-    "normalize_embeddings": False,
-    # "normalize_embeddings": True,  # XXX
+    # L2-normalize every window embedding before averaging (and the average after it).
+    # The triplet loss is trained on L2-normalized embeddings, so only their direction
+    # is meaningful
+    "normalize_embeddings": True,
     "average_anchors": True,
-    # "average_batch": False,  # XXX
     "average_batch": True,
     "drop_anchor_outliers": 0,
-    # "drop_batch_outliers": 0,
-    "drop_batch_outliers": 5,  # XXX
+    "drop_batch_outliers": 0,
 }
 
 config = {
-    # These do not matter
+    # Defaults for testing; the TRAINING_CONFIG_KEYS entries are replaced with the
+    # values the models were trained with (run_info.yaml)
     "dropout": 0.0,
     "loss": "triplet",
     "similarity": "euclidean",
@@ -49,58 +50,44 @@ config = {
         "margin": 1.4,  # Doesn't matter during inference
         "miner": False,  # Doesn't matter during inference
     },
-    # All of these are False to do them manually
     "lpnorm_embeddings_training": False,
     "center_embeddings_inference": False,
     "lpnorm_embeddings_inference": False,
-    #
 }
-# config = {
-#     "use_difference": True,
-#     "gear_harmonics_to_include": 8,
-#     "gear_sideband_block_size": 5,
-#     # "gear_sideband_block_size": 3,  # XXX
-#     "embedding_len": 2,
-#     "model": "embedding",
-#     "backbone": "MlpMixer",
-#     "model_args": {
-#         "intermediate_L2": False,
-#         # "intermediate_L2": True,  # XXX
-#         # NORMAL
-#         # "num_layers": 4,
-#         # "hidden_dim": 21,
-#         # "tokens_mlp_dim": 16,
-#         # "channels_mlp_dim": 42,
-#         # LARGER HIDDEN
-#         "num_layers": 3,
-#         "hidden_dim": 32,
-#         "tokens_mlp_dim": 16,
-#         "channels_mlp_dim": 64,
-#         # TUNI
-#         # "num_layers": 4,
-#         # "hidden_dim": 18,
-#         # "tokens_mlp_dim": 16,
-#         # "channels_mlp_dim": 18,
-#     },
-#     "dropout": 0.0,
-#     "loss": "triplet",
-#     "loss_args": {
-#         "margin": 1.4,  # Doesn't matter during inference
-#         "miner": False,  # Doesn't matter during inference
-#     },
-#     "similarity": "euclidean",  # Doesn't matter during inference
-#     "lpnorm_embeddings_training": False,  # All of these are False to do them manually
-#     "center_embeddings_inference": False,
-#     "lpnorm_embeddings_inference": False,
-# }
 
 UNSW_teeth = 27
 AGFD_teeth = 15
 MCC5_teeth = 36
 
-UNSW_ANCHOR_NUM = 16
+# Fraction of the H1 windows of each condition used for the anchor, the rest form the
+# healthy prototype (UNSW_V6 has 62-92 H1 windows per condition)
+UNSW_ANCHOR_FRACTION = 0.5
 MCC5_ANCHOR_NUM = 7
-AGFD_ANCHOR_NUM = 16
+# The only severity of missing tooth in MCC5-THU
+MCC5_MISSING_TOOTH_SEVERITY = "S"
+
+# Sensors used when testing on each dataset: the training sensor by default. With
+# use_all_sensors() (--all-sensors), every (model, sensor) pair votes, i.e. the
+# prototype distances are averaged over ensemble members and all sensors (AGFD acc2 is
+# broken for installation 3, so it isn't used)
+AGFD_SENSORS = ["acc4"]
+MCC5_SENSORS = ["gearbox_vibration_x"]
+ALL_AGFD_SENSORS = ["acc3", "acc4"]
+ALL_MCC5_SENSORS = ["gearbox_vibration_x", "gearbox_vibration_y", "gearbox_vibration_z"]
+
+
+def use_all_sensors():
+    """Test with all sensors voting instead of the training sensor only."""
+    global AGFD_SENSORS, MCC5_SENSORS
+    AGFD_SENSORS = ALL_AGFD_SENSORS
+    MCC5_SENSORS = ALL_MCC5_SENSORS
+
+AGFD_SPEEDS = [500, 750, 1000, 1250, 1500]
+AGFD_LOADS = [1, 6, 11]
+AGFD_INSTALLATIONS = [1, 2, 3]
+# Healthy gears that never had faults seeded in them for a class in the test
+# (missing tooth is GP5, mild crack GP9, and GP8 doesn't exist)
+AGFD_CLEAN_HEALTHY_GPS = [1, 2, 3, 4, 6, 7]
 
 # HELPERS
 ###
@@ -171,6 +158,9 @@ def embed(
 
     if average_anchors:
         embeddings = reduce(embeddings, "b n f -> b f", reduction="mean")
+
+    if normalize_embeddings:
+        embeddings = F.normalize(embeddings, p=2, dim=-1)
 
     if drop_batch_outliers > 0:
         embeddings = remove_batch_outliers(embeddings, num_outliers=drop_batch_outliers)
@@ -449,8 +439,7 @@ def prototype_distances(query_embs, prototypes):
 
 def load_UNSW():
     UNSW_crack_df = pd.read_feather(
-        # Path.cwd() / "data" / "UNSW_V6.feather"
-        Path.cwd() / "data" / "UNSW_gear_crack_OT_V2.feather"
+        Path.cwd() / "data" / "UNSW_V6.feather"
     )
 
     # Change S crack to second healthy
@@ -460,7 +449,6 @@ def load_UNSW():
     )
 
     # Need only one OT method
-    # UNSW_crack_df = UNSW_crack_df[UNSW_crack_df["OT_method"] == "nico"]
     UNSW_crack_df = UNSW_crack_df[UNSW_crack_df["OT_method"] == "signal"]
 
     # Drop unnecessary columns
@@ -503,24 +491,20 @@ def run_UNSW(model, weight_dir):
                     # ANCHOR
                     #
 
+                    H1_samples = get_samples_UNSW(UNSW_crack_df, speed, load, "H1")
+                    num_anchors = int(len(H1_samples) * UNSW_ANCHOR_FRACTION)
+
                     if config["use_difference"]:
-                        # * Use 16 first samples for anchors. Slowest speed has 32 samples, so it's 50% of that.
-                        # * 16 from each to have consistent number of anchor samples.
-                        anchor_samples = get_samples_UNSW(
-                            UNSW_crack_df, speed, load, "H1"
-                        )[:UNSW_ANCHOR_NUM]
+                        # First part of H1 for the anchor
+                        anchor_samples = H1_samples[:num_anchors]
 
                         anchor_samples = reduce(anchor_samples, "b w -> 1 w", "mean")
-                        # anchor_samples = rearrange(anchor_samples, "(a b) w -> a b w", a=4, b=4)
-                        # anchor_samples = reduce(anchor_samples, "a b w -> a w", a=4, b=4)
 
                     # HEALTHY 1
                     #
 
-                    # * Drop 16 first from H1, as those are used for anchors
-                    healthy_samples_1 = get_samples_UNSW(
-                        UNSW_crack_df, speed, load, "H1"
-                    )[UNSW_ANCHOR_NUM:]
+                    # Rest of H1, the anchor windows are left out
+                    healthy_samples_1 = H1_samples[num_anchors:]
                     healthy_emb_df_1 = embed_wrapper(
                         healthy_samples_1,
                         anchor_samples,
@@ -591,12 +575,9 @@ def run_UNSW(model, weight_dir):
     # 1 severity for query
 
     all_accuracies = []
-    # for offset in range(10):
     for offset in range(ensemble_repeats):
         UNSW_accuracies = []
         # For every operating conditions (consisting of speed and load)
-        # for speed in [10]:
-        #     for load in [5]:
         for speed in [5, 10, 15, 20]:
             for load in [5, 10, 15]:
                 for support_severity, query_severity in [("M", "L"), ("L", "M")]:
@@ -624,8 +605,7 @@ def run_UNSW(model, weight_dir):
                             .mean(axis=0)
                         )
 
-                        # Use everything else for query
-                        # (Not H1 [used for anchor] and not samples from operating condition used for prototypes)
+                        # Queries: H2 (healthy) and the crack severity not used for the prototype
                         query_df = round_df[
                             round_df["severity"].isin([query_severity, "H2"])
                         ]
@@ -676,9 +656,8 @@ def run_UNSW(model, weight_dir):
 ###
 
 
-def load_MCC5():
-    # MCC5_df = pd.read_feather(Path.cwd() / "data" / "MCC5_V6.feather")  # XXX
-    MCC5_df = pd.read_feather(Path.cwd() / "data" / "MCC5-THU_OT_V3.feather")  # XXX
+def load_MCC5(sensor="gearbox_vibration_x"):
+    MCC5_df = pd.read_feather(Path.cwd() / "data" / "MCC5_V6.feather")
 
     # Need only one OT method
     MCC5_df = MCC5_df[MCC5_df["OT_method"] == "signal"]
@@ -690,31 +669,22 @@ def load_MCC5():
         columns=["OT_method", "TSA_size"],
         inplace=True,
     )
-    # Only use gearbox_vibration_x sensor
-    MCC5_df = MCC5_df[
-        [
-            "speed",
-            "load",
-            "severity",
-            "class",
-            "circulation",
-            "gearbox_vibration_x",  # FIXME
-        ]
-    ]
-    MCC5_df.rename(columns={"gearbox_vibration_x": "signal"}, inplace=True)
+    # Only use one sensor
+    MCC5_df = MCC5_df[["speed", "load", "severity", "class", "circulation", sensor]]
+    MCC5_df = MCC5_df.rename(columns={sensor: "signal"})
 
     # Drop in-between speeds and loads
     MCC5_df = MCC5_df[MCC5_df["speed"].isin([1000, 2000, 3000])]
     MCC5_df = MCC5_df[MCC5_df["load"].isin([10, 20])]
 
-    # Keep only crack, wear, and healthy
-    MCC5_df = MCC5_df[MCC5_df["class"].isin(["crack", "wear", "healthy"])]
+    # Keep only crack, missing tooth, and healthy
+    MCC5_df = MCC5_df[MCC5_df["class"].isin(["crack", "missing_tooth", "healthy"])]
 
     return MCC5_df
 
 
 def run_MCC5(model, weight_dir):
-    MCC5_df = load_MCC5()
+    MCC5_dfs = [load_MCC5(sensor) for sensor in MCC5_SENSORS]
 
     all_weight_dirs, ensemble_repeats = find_ensemble_members(weight_dir)
 
@@ -737,134 +707,117 @@ def run_MCC5(model, weight_dir):
             )
             model.eval()
 
-            # Embeddings for one ensemble model
-            all_emb_dfs = []
-            for speed in [1000, 2000, 3000]:
-                for load in [10, 20]:
-                    # ANCHOR
-                    #
+            # One set of embeddings per sensor
+            sensor_emb_dfs = []
+            for MCC5_df in MCC5_dfs:
+                # Embeddings for one ensemble model
+                all_emb_dfs = []
+                for speed in [1000, 2000, 3000]:
+                    for load in [10, 20]:
+                        # ANCHOR
+                        #
 
-                    if config["use_difference"]:
-                        # * Use 7 first samples for anchors. Slowest speed has 14 samples, so it's 50% of that.
-                        # * 7 from each to have consistent number of anchor samples.
-                        anchor_samples = get_samples_MCC5(
+                        if config["use_difference"]:
+                            # First 7 torque-run windows for the anchor (the same number for
+                            # every condition; V6 test units have 18-28 windows)
+                            anchor_samples = get_samples_MCC5(
+                                MCC5_df, speed, load, "healthy", "-", circulation="torque"
+                            )[:MCC5_ANCHOR_NUM]
+
+                            anchor_samples = reduce(anchor_samples, "b w -> 1 w", "mean")
+
+                        # HEALTHY 1
+                        #
+
+                        # Get samples from specific conditions
+                        # Rest of the torque run, the anchor windows are left out
+                        healthy_samples_1 = get_samples_MCC5(
                             MCC5_df, speed, load, "healthy", "-", circulation="torque"
-                        )[:MCC5_ANCHOR_NUM]
+                        )[MCC5_ANCHOR_NUM:]
+                        healthy_emb_df_1 = embed_wrapper(
+                            healthy_samples_1,
+                            anchor_samples,
+                            model,
+                            config,
+                            embedding_specs,
+                        )
+                        healthy_emb_df_1["class"] = "healthy"
+                        healthy_emb_df_1["severity"] = "H1"
+                        healthy_emb_df_1["circulation"] = "torque"
 
-                        anchor_samples = reduce(anchor_samples, "b w -> 1 w", "mean")
-                        # anchor_samples = rearrange(anchor_samples, "(a b) w -> a b w", a=4, b=4)
-                        # anchor_samples = reduce(anchor_samples, "a b w -> a w", a=4, b=4)
+                        # HEALTHY 2
+                        #
 
-                    # HEALTHY 1
-                    #
+                        # Get samples from specific conditions
+                        healthy_samples_2 = get_samples_MCC5(
+                            MCC5_df, speed, load, "healthy", "-", circulation="speed"
+                        )
+                        healthy_emb_df_2 = embed_wrapper(
+                            healthy_samples_2,
+                            anchor_samples,
+                            model,
+                            config,
+                            embedding_specs,
+                        )
+                        healthy_emb_df_2["class"] = "healthy"
+                        healthy_emb_df_2["severity"] = "H2"
+                        healthy_emb_df_2["circulation"] = "speed"
 
-                    # Get samples from specific conditions
-                    # * Drop 7 first from H1, as those are used for anchors
-                    healthy_samples_1 = get_samples_MCC5(
-                        MCC5_df, speed, load, "healthy", "-", circulation="torque"
-                    )[MCC5_ANCHOR_NUM:]
-                    healthy_emb_df_1 = embed_wrapper(
-                        healthy_samples_1,
-                        anchor_samples,
-                        model,
-                        config,
-                        embedding_specs,
-                    )
-                    healthy_emb_df_1["class"] = "healthy"
-                    healthy_emb_df_1["severity"] = "H1"
+                        # FAULTS
+                        #
 
-                    # HEALTHY 2
-                    #
+                        # Crack severities and missing tooth from both runs. Prototypes
+                        # come from the torque run and queries from the speed run, like
+                        # healthy (H1 torque, H2 speed).
+                        fault_emb_dfs = []
+                        for fault_class, severities in [
+                            ("crack", ["M", "L"]),
+                            ("missing_tooth", [MCC5_MISSING_TOOTH_SEVERITY]),
+                        ]:
+                            for severity in severities:
+                                for circulation in ["torque", "speed"]:
+                                    fault_samples = get_samples_MCC5(
+                                        MCC5_df,
+                                        speed,
+                                        load,
+                                        fault_class,
+                                        severity,
+                                        circulation=circulation,
+                                    )
+                                    fault_emb_df = embed_wrapper(
+                                        fault_samples,
+                                        anchor_samples,
+                                        model,
+                                        config,
+                                        embedding_specs,
+                                    )
+                                    fault_emb_df["class"] = fault_class
+                                    fault_emb_df["severity"] = severity
+                                    fault_emb_df["circulation"] = circulation
+                                    fault_emb_dfs.append(fault_emb_df)
 
-                    # Get samples from specific conditions
-                    healthy_samples_2 = get_samples_MCC5(
-                        MCC5_df, speed, load, "healthy", "-", circulation="speed"
-                    )
-                    healthy_emb_df_2 = embed_wrapper(
-                        healthy_samples_2,
-                        anchor_samples,
-                        model,
-                        config,
-                        embedding_specs,
-                    )
-                    healthy_emb_df_2["class"] = "healthy"
-                    healthy_emb_df_2["severity"] = "H2"
+                        # Combine all dataframes and add back operating condition info
+                        emb_df = pd.concat(
+                            [healthy_emb_df_1, healthy_emb_df_2, *fault_emb_dfs],
+                            ignore_index=True,
+                        )
+                        emb_df["speed"] = speed
+                        emb_df["load"] = load
 
-                    # CRACK 1
-                    #
+                        all_emb_dfs.append(emb_df)
 
-                    # Get samples from specific conditions
-                    crack_samples_1 = get_samples_MCC5(
-                        MCC5_df, speed, load, "crack", "M"
-                    )
-                    crack_emb_df_1 = embed_wrapper(
-                        crack_samples_1, anchor_samples, model, config, embedding_specs
-                    )
-                    crack_emb_df_1["class"] = "crack"
-                    crack_emb_df_1["severity"] = "M"
-
-                    # CRACK 2
-                    #
-
-                    # Get samples from specific conditions
-                    crack_samples_2 = get_samples_MCC5(
-                        MCC5_df, speed, load, "crack", "L"
-                    )
-                    crack_emb_df_2 = embed_wrapper(
-                        crack_samples_2, anchor_samples, model, config, embedding_specs
-                    )
-                    crack_emb_df_2["class"] = "crack"
-                    crack_emb_df_2["severity"] = "L"
-
-                    # WEAR 1
-                    #
-
-                    # Get samples from specific conditions
-                    wear_samples_1 = get_samples_MCC5(MCC5_df, speed, load, "wear", "M")
-                    wear_emb_df_1 = embed_wrapper(
-                        wear_samples_1, anchor_samples, model, config, embedding_specs
-                    )
-                    wear_emb_df_1["class"] = "wear"
-                    wear_emb_df_1["severity"] = "M"
-
-                    # WEAR 2
-                    #
-
-                    # Get samples from specific conditions
-                    wear_samples_2 = get_samples_MCC5(MCC5_df, speed, load, "wear", "L")
-                    wear_emb_df_2 = embed_wrapper(
-                        wear_samples_2, anchor_samples, model, config, embedding_specs
-                    )
-                    wear_emb_df_2["class"] = "wear"
-                    wear_emb_df_2["severity"] = "L"
-
-                    # Combine all dataframes and add back operating condition info
-                    emb_df = pd.concat(
-                        [
-                            healthy_emb_df_1,
-                            healthy_emb_df_2,
-                            crack_emb_df_1,
-                            crack_emb_df_2,
-                            wear_emb_df_1,
-                            wear_emb_df_2,
-                        ],
-                        ignore_index=True,
-                    )
-                    emb_df["speed"] = speed
-                    emb_df["load"] = load
-
-                    all_emb_dfs.append(emb_df)
-
-            all_emb_dfs = pd.concat(all_emb_dfs, ignore_index=True)
-            MCC5_ensemble_emb_dfs.append(all_emb_dfs)
+                all_emb_dfs = pd.concat(all_emb_dfs, ignore_index=True)
+                sensor_emb_dfs.append(all_emb_dfs)
+            MCC5_ensemble_emb_dfs.append(sensor_emb_dfs)
 
     # MCC5 accuracy evaluation
 
-    # 1 severity for prototypes
-    # 1 severity for query
+    # Healthy: H1 (torque run) for the prototype, H2 (speed run) for queries
+    # Crack: one severity from the torque run for the prototype, the other severity
+    #   from the speed run for queries
+    # Missing tooth: torque run for the prototype, speed run for queries
 
     all_accuracies = []
-    # for offset in range(10):
     for offset in range(ensemble_repeats):
         MCC5_accuracies = []
         for speed in [1000, 2000, 3000]:
@@ -872,60 +825,41 @@ def run_MCC5(model, weight_dir):
                 for support_severity, query_severity in [["M", "L"], ["L", "M"]]:
                     ensemble_distances = []
                     for e in range(ENSEMBLE_SIZE):
-                        round_df = MCC5_ensemble_emb_dfs[offset * ENSEMBLE_SIZE + e]
-                        round_df = round_df[
-                            (round_df["speed"] == speed) & (round_df["load"] == load)
-                        ]
+                        for round_df in MCC5_ensemble_emb_dfs[offset * ENSEMBLE_SIZE + e]:
+                            round_df = round_df[
+                                (round_df["speed"] == speed) & (round_df["load"] == load)
+                            ]
 
-                        healthy_prototype_H1 = (
-                            round_df[
-                                (round_df["class"] == "healthy")
-                                & (round_df["severity"] == "H1")
-                            ][embedding_columns()]
-                            .to_numpy()
-                            .mean(axis=0)
-                        )
+                            def mean_embedding(fault_class, severity, circulation):
+                                return (
+                                    round_df[
+                                        (round_df["class"] == fault_class)
+                                        & (round_df["severity"] == severity)
+                                        & (round_df["circulation"] == circulation)
+                                    ][embedding_columns()]
+                                    .to_numpy()
+                                    .mean(axis=0)
+                                )
 
-                        crack_prototype = (
-                            round_df[
-                                (round_df["class"] == "crack")
-                                & (round_df["severity"] == support_severity)
-                            ][embedding_columns()]
-                            .to_numpy()
-                            .mean(axis=0)
-                        )
+                            prototypes = [
+                                mean_embedding("healthy", "H1", "torque"),
+                                mean_embedding("crack", support_severity, "torque"),
+                                mean_embedding(
+                                    "missing_tooth", MCC5_MISSING_TOOTH_SEVERITY, "torque"
+                                ),
+                            ]
+                            query_embs = np.stack([
+                                mean_embedding("healthy", "H2", "speed"),
+                                mean_embedding("crack", query_severity, "speed"),
+                                mean_embedding(
+                                    "missing_tooth", MCC5_MISSING_TOOTH_SEVERITY, "speed"
+                                ),
+                            ])
+                            # healthy: 0, crack: 1, missing tooth: 2
+                            targets = np.array([0, 1, 2])
 
-                        wear_prototype = (
-                            round_df[
-                                (round_df["class"] == "wear")
-                                & (round_df["severity"] == support_severity)
-                            ][embedding_columns()]
-                            .to_numpy()
-                            .mean(axis=0)
-                        )
-
-                        query_df = round_df[
-                            (round_df["severity"].isin([query_severity, "H2"]))
-                            & (round_df["class"].isin(["healthy", "crack", "wear"]))
-                        ]
-
-                        # Convert severities to target labels [0, 1, 2]
-                        targets = (
-                            query_df["class"]
-                            .map({
-                                "healthy": 0,
-                                "crack": 1,
-                                "wear": 2,
-                            })
-                            .to_numpy()
-                        )
-                        query_embs = query_df[embedding_columns()].to_numpy()
-
-                        distances = prototype_distances(
-                            query_embs,
-                            [healthy_prototype_H1, crack_prototype, wear_prototype],
-                        )
-                        ensemble_distances.append(distances)
+                            distances = prototype_distances(query_embs, prototypes)
+                            ensemble_distances.append(distances)
 
                     ensemble_distances = np.stack(ensemble_distances, axis=-1)
                     # Combine ensemble members (soft or hard voting)
@@ -955,342 +889,191 @@ def run_MCC5(model, weight_dir):
 ###
 
 
-def load_AGFD():
-    # AGFD_df = pd.read_feather(Path.cwd() / "data" / "AGFD_V6.feather")
-    AGFD_df = pd.read_feather(Path.cwd() / "data" / "AGFD_OT_V2.feather")
+def load_AGFD(sensor="acc4"):
+    AGFD_df = pd.read_feather(Path.cwd() / "data" / "AGFD_V6.feather")
 
     # Need only one OT method
     AGFD_df = AGFD_df[AGFD_df["OT_method"] == "signal"]
     # Should only be 40 in this file, but just in case
     AGFD_df = AGFD_df[AGFD_df["TSA_size"] == 40]
 
-    # # Drop unnecessary columns
-    AGFD_df.drop(
-        columns=["OT_method", "TSA_size", "acc2", "acc3"],
-        inplace=True,
+    # Use only one sensor
+    AGFD_df = AGFD_df.drop(
+        columns=["OT_method", "TSA_size"]
+        + [other for other in ["acc2", "acc3", "acc4"] if other != sensor]
     )
-    # Use only Acc4
-    AGFD_df.rename(columns={"acc4": "signal"}, inplace=True)
+    AGFD_df = AGFD_df.rename(columns={sensor: "signal"})
 
     # Drop 250 RPM data
     AGFD_df = AGFD_df[AGFD_df["speed"] != 250]
 
+    # Severe "crack" (Severe_TFF_GP5) is an entirely missing tooth
+    missing_tooth = (AGFD_df["class"] == "crack") & (AGFD_df["severity"] == "L")
+    AGFD_df.loc[missing_tooth, "class"] = "missing_tooth"
+
     return AGFD_df
 
 
+def embed_AGFD(AGFD_df, model, anchor_GPs, healthy_GPs):
+    """
+    Embeddings of one model for every operating condition, with the anchor averaged
+    over `anchor_GPs` (equal weight per gear). Returns
+    {(speed, load, unit, GP or installation): embedding}, one batch-averaged
+    embedding per entry.
+    """
+    embeddings = {}
+    for speed in AGFD_SPEEDS:
+        for load in AGFD_LOADS:
+            anchor_samples = None
+            if config["use_difference"]:
+                anchor_samples = np.mean(
+                    [
+                        get_samples_AGFD(
+                            AGFD_df, speed, load, "healthy", "-", healthy_GP=GP
+                        ).mean(axis=0)
+                        for GP in anchor_GPs
+                    ],
+                    axis=0,
+                )[np.newaxis, :]
+
+            units = [
+                (("healthy", GP), dict(fault_class="healthy", severity="-", healthy_GP=GP))
+                for GP in healthy_GPs
+            ]
+            for installation in AGFD_INSTALLATIONS:
+                units.append((
+                    ("missing_tooth", installation),
+                    dict(fault_class="missing_tooth", severity="L", installation=installation),
+                ))
+                units.append((
+                    ("crack_S", installation),
+                    dict(fault_class="crack", severity="S", installation=installation),
+                ))
+
+            for (unit, key), selection in units:
+                samples = get_samples_AGFD(AGFD_df, speed, load, **selection)
+                embeddings[(speed, load, unit, key)] = embed_wrapper(
+                    samples, anchor_samples, model, config, embedding_specs
+                ).to_numpy()[0]
+
+    return embeddings
+
+
 def run_AGFD(model, weight_dir):
-    AGFD_df = load_AGFD()
+    """
+    Healthy gears: support and query come from two different gears in
+    AGFD_CLEAN_HEALTHY_GPS, and the anchor is averaged over the remaining ones. All
+    ordered (support, query) pairs are used. These gears never had faults seeded in
+    them for a class in the test (missing tooth is GP5, mild crack GP9).
+    Faults: prototype from one installation, queries from another.
+
+    Main task: healthy vs missing tooth. Mild crack is below the detection limit and
+    is reported separately (healthy vs mild crack).
+    """
+    assert embedding_specs["average_batch"], (
+        "AGFD evaluation expects one batch-averaged embedding per unit"
+    )
+    AGFD_dfs = [load_AGFD(sensor) for sensor in AGFD_SENSORS]
 
     all_weight_dirs, ensemble_repeats = find_ensemble_members(weight_dir)
 
-    AGFD_ensemble_emb_dfs = []
-    for ensemble_repeat_num in range(1, ensemble_repeats + 1):
-        # for ensemble_repeat_num in range(1, 5):  # XXX
-        ensemble_weight_dirs = all_weight_dirs[
-            (ensemble_repeat_num - 1) * ENSEMBLE_SIZE : ensemble_repeat_num
-            * ENSEMBLE_SIZE
-        ]
+    role_pairs = list(itertools.permutations(AGFD_CLEAN_HEALTHY_GPS, 2))
 
-        for e in range(ENSEMBLE_SIZE):
-            # Load ensemble models
-            model.backbone.load_state_dict(
-                torch.load(
-                    weight_dir
-                    / ensemble_weight_dirs[e]
-                    / f"{ENSEMBLE_CHECKPOINT_NUM}.pth",
-                    weights_only=True,
-                )
+    # Embeddings for every ensemble member and anchor (one anchor per unordered pair)
+    # member_embeddings[member][anchor_GPs] = [embed_AGFD(...) for every sensor]
+    member_embeddings = []
+    for member_dir in all_weight_dirs[: ensemble_repeats * ENSEMBLE_SIZE]:
+        model.backbone.load_state_dict(
+            torch.load(
+                weight_dir / member_dir / f"{ENSEMBLE_CHECKPOINT_NUM}.pth",
+                weights_only=True,
             )
-            model.eval()
+        )
+        model.eval()
 
-            # Embeddings for one ensemble model
-            all_emb_dfs = []
-            for speed in [500, 750, 1000, 1250, 1500]:
-                for load in [1, 6, 11]:
-                    # ANCHOR
-                    #
+        embeddings = {}
+        for support_GP, query_GP in role_pairs:
+            anchor_GPs = tuple(
+                GP for GP in AGFD_CLEAN_HEALTHY_GPS if GP not in (support_GP, query_GP)
+            )
+            if anchor_GPs not in embeddings:
+                embeddings[anchor_GPs] = [
+                    embed_AGFD(AGFD_df, model, anchor_GPs, [support_GP, query_GP])
+                    for AGFD_df in AGFD_dfs
+                ]
+        member_embeddings.append(embeddings)
 
-                    if config["use_difference"]:
-                        # * 16 should be enough
-                        anchor_samples = get_samples_AGFD(
-                            AGFD_df, speed, load, "healthy", "-", healthy_GP=4
-                        )  # [:AGFD_ANCHOR_NUM]
-
-                        anchor_samples = reduce(anchor_samples, "b w -> 1 w", "mean")
-                        # anchor_samples = rearrange(anchor_samples, "(a b) w -> a b w", a=4, b=4)
-                        # anchor_samples = reduce(anchor_samples, "a b w -> a w", a=4, b=4)
-
-                    # HEALTHY 1
-                    #
-
-                    # Get samples from specific conditions
-                    # * Drop 16 first from H1, as those are used for anchors
-                    healthy_samples_1 = get_samples_AGFD(
-                        AGFD_df, speed, load, "healthy", "-", healthy_GP=5
-                    )  # [AGFD_ANCHOR_NUM:]
-
-                    healthy_emb_df_1 = embed_wrapper(
-                        healthy_samples_1,
-                        anchor_samples,
-                        model,
-                        config,
-                        embedding_specs,
-                    )
-                    healthy_emb_df_1["class"] = "healthy"
-                    healthy_emb_df_1["severity"] = "H1"
-                    healthy_emb_df_1["installation"] = 0
-
-                    # HEALTHY 2
-                    #
-
-                    # Get samples from specific conditions
-                    healthy_samples_2 = get_samples_AGFD(
-                        AGFD_df,
-                        speed,
-                        load,
-                        "healthy",
-                        "-",
-                        healthy_GP=5,
-                    )
-                    healthy_emb_df_2 = embed_wrapper(
-                        healthy_samples_2,
-                        anchor_samples,
-                        model,
-                        config,
-                        embedding_specs,
-                    )
-                    healthy_emb_df_2["class"] = "healthy"
-                    healthy_emb_df_2["severity"] = "H2"
-                    healthy_emb_df_2["installation"] = 0
-
-                    crack_emb_dfs_1 = []
-                    crack_emb_dfs_2 = []
-                    wear_emb_dfs_1 = []
-                    wear_emb_dfs_2 = []
-                    for installation in [1, 2, 3]:
-                        # CRACK 1
-                        #
-
-                        # Get samples from specific conditions
-                        crack_samples_1 = get_samples_AGFD(
-                            AGFD_df,
-                            speed,
-                            load,
-                            "crack",
-                            "S",
-                            installation=installation,
-                        )
-                        crack_emb_df_1 = embed_wrapper(
-                            crack_samples_1,
-                            anchor_samples,
-                            model,
-                            config,
-                            embedding_specs,
-                        )
-                        crack_emb_df_1["class"] = "crack"
-                        crack_emb_df_1["severity"] = "S"
-                        crack_emb_df_1["installation"] = installation
-                        crack_emb_dfs_1.append(crack_emb_df_1)
-
-                        # CRACK 2
-                        #
-
-                        # Get samples from specific conditions
-                        crack_samples_2 = get_samples_AGFD(
-                            AGFD_df,
-                            speed,
-                            load,
-                            "crack",
-                            "L",
-                            installation=installation,
-                        )
-                        crack_emb_df_2 = embed_wrapper(
-                            crack_samples_2,
-                            anchor_samples,
-                            model,
-                            config,
-                            embedding_specs,
-                        )
-                        crack_emb_df_2["class"] = "crack"
-                        crack_emb_df_2["severity"] = "L"
-                        crack_emb_df_2["installation"] = installation
-                        crack_emb_dfs_2.append(crack_emb_df_2)
-
-                        # WEAR 1
-                        #
-
-                        # Get samples from specific conditions
-                        wear_samples_1 = get_samples_AGFD(
-                            AGFD_df, speed, load, "wear", "S", installation=installation
-                        )
-                        wear_emb_df_1 = embed_wrapper(
-                            wear_samples_1,
-                            anchor_samples,
-                            model,
-                            config,
-                            embedding_specs,
-                        )
-                        wear_emb_df_1["class"] = "wear"
-                        wear_emb_df_1["severity"] = "S"
-                        wear_emb_df_1["installation"] = installation
-                        wear_emb_dfs_1.append(wear_emb_df_1)
-
-                        # WEAR 2
-                        #
-
-                        # Get samples from specific conditions
-                        wear_samples_2 = get_samples_AGFD(
-                            AGFD_df, speed, load, "wear", "L", installation=installation
-                        )
-                        wear_emb_df_2 = embed_wrapper(
-                            wear_samples_2,
-                            anchor_samples,
-                            model,
-                            config,
-                            embedding_specs,
-                        )
-                        wear_emb_df_2["class"] = "wear"
-                        wear_emb_df_2["severity"] = "L"
-                        wear_emb_df_2["installation"] = installation
-                        wear_emb_dfs_2.append(wear_emb_df_2)
-
-                    crack_emb_df_1 = pd.concat(crack_emb_dfs_1, ignore_index=True)
-                    crack_emb_df_2 = pd.concat(crack_emb_dfs_2, ignore_index=True)
-                    wear_emb_df_1 = pd.concat(wear_emb_dfs_1, ignore_index=True)
-                    wear_emb_df_2 = pd.concat(wear_emb_dfs_2, ignore_index=True)
-
-                    # Combine all dataframes and add back operating condition info
-                    emb_df = pd.concat(
-                        [
-                            healthy_emb_df_1,
-                            healthy_emb_df_2,
-                            crack_emb_df_1,
-                            crack_emb_df_2,
-                            wear_emb_df_1,
-                            wear_emb_df_2,
-                        ],
-                        ignore_index=True,
-                    )
-                    emb_df["speed"] = speed
-                    emb_df["load"] = load
-
-                    all_emb_dfs.append(emb_df)
-
-            all_emb_dfs = pd.concat(all_emb_dfs, ignore_index=True)
-            AGFD_ensemble_emb_dfs.append(all_emb_dfs)
-
-    # AGFD accuracy evaluation
-
-    # 1 installation for prototypes
-    # 1 installation for queries
-
-    all_accuracies = []
-    # for offset in range(10):
-    # for offset in range(2): # XXX
-    for offset in range(ensemble_repeats):
-        AGFD_accuracies = []
-        for support_installation in [1, 2, 3]:
-            for query_installation in [1, 2, 3]:
-                if support_installation == query_installation:
-                    continue
-
-                for speed in [500, 750, 1000, 1250, 1500]:
-                    for load in [1, 6, 11]:
-                        ensemble_distances = []
-                        for e in range(ENSEMBLE_SIZE):
-                            round_df = AGFD_ensemble_emb_dfs[offset * ENSEMBLE_SIZE + e]
-                            round_df = round_df[
-                                (round_df["speed"] == speed)
-                                & (round_df["load"] == load)
-                            ]
-
-                            healthy_prototype_H1 = (
-                                round_df[
-                                    (round_df["class"] == "healthy")
-                                    & (round_df["severity"] == "H1")
-                                ][embedding_columns()]
-                                .to_numpy()
-                                .mean(axis=0)
-                            )
-
-                            crack_prototype = (
-                                round_df[
-                                    (round_df["class"] == "crack")
-                                    & (round_df["severity"] == "S")
-                                    & (round_df["installation"] == support_installation)
-                                ][embedding_columns()]
-                                .to_numpy()
-                                .mean(axis=0)
-                            )
-
-                            wear_prototype = (
-                                round_df[
-                                    (round_df["class"] == "wear")
-                                    & (round_df["severity"] == "L")
-                                    & (round_df["installation"] == support_installation)
-                                ][embedding_columns()]
-                                .to_numpy()
-                                .mean(axis=0)
-                            )
-
-                            query_df = round_df[
-                                (round_df["installation"].isin([0, query_installation]))
-                                # & (round_df["severity"].isin(["H2", "S", "L"]))
-                                & (
-                                    (round_df["severity"] == "H2")
-                                    | (
-                                        (round_df["severity"] == "L")
-                                        & (round_df["class"] == "crack")
+    def evaluate(fault_unit):
+        """Accuracies of healthy vs `fault_unit` for each ensemble, plus recalls."""
+        ensemble_accuracies = []
+        healthy_hits, fault_hits = [], []
+        healthy_hits_per_GP = {GP: [] for GP in AGFD_CLEAN_HEALTHY_GPS}
+        for offset in range(ensemble_repeats):
+            accuracies = []
+            for support_GP, query_GP in role_pairs:
+                anchor_GPs = tuple(
+                    GP
+                    for GP in AGFD_CLEAN_HEALTHY_GPS
+                    if GP not in (support_GP, query_GP)
+                )
+                for support_installation, query_installation in itertools.permutations(
+                    AGFD_INSTALLATIONS, 2
+                ):
+                    for speed in AGFD_SPEEDS:
+                        for load in AGFD_LOADS:
+                            ensemble_distances = []
+                            for e in range(ENSEMBLE_SIZE):
+                                for E in member_embeddings[offset * ENSEMBLE_SIZE + e][anchor_GPs]:
+                                    prototypes = [
+                                        E[(speed, load, "healthy", support_GP)],
+                                        E[(speed, load, fault_unit, support_installation)],
+                                    ]
+                                    query_embs = np.stack([
+                                        E[(speed, load, "healthy", query_GP)],
+                                        E[(speed, load, fault_unit, query_installation)],
+                                    ])
+                                    ensemble_distances.append(
+                                        prototype_distances(query_embs, prototypes)
                                     )
-                                    | (
-                                        (round_df["severity"] == "L")
-                                        & (round_df["class"] == "wear")
-                                    )
-                                )
-                            ]
 
-                            # Convert severities to target labels [0, 1, 2]
-                            targets = (
-                                query_df["class"]
-                                .map({"healthy": 0, "crack": 1, "wear": 2})
-                                .to_numpy()
-                            )
+                            ensemble_distances = np.stack(ensemble_distances, axis=-1)
+                            hits = vote(ensemble_distances) == np.array([0, 1])
 
-                            query_embs = query_df[embedding_columns()].to_numpy()
+                            accuracies.append(np.mean(hits))
+                            healthy_hits.append(hits[0])
+                            fault_hits.append(hits[1])
+                            healthy_hits_per_GP[query_GP].append(hits[0])
+            ensemble_accuracies.append(np.mean(accuracies))
 
-                            distances = prototype_distances(
-                                query_embs,
-                                [
-                                    healthy_prototype_H1,
-                                    crack_prototype,
-                                    wear_prototype,
-                                ],
-                            )
+        return ensemble_accuracies, healthy_hits, fault_hits, healthy_hits_per_GP
 
-                            ensemble_distances.append(distances)
+    print(
+        f"Healthy gears {AGFD_CLEAN_HEALTHY_GPS} rotated as support/query, anchor "
+        f"averaged over the other {len(AGFD_CLEAN_HEALTHY_GPS) - 2}"
+    )
+    for fault_unit, name in [
+        ("crack_S", "Detection limit, healthy vs mild crack"),
+        ("missing_tooth", "Healthy vs missing tooth"),
+    ]:
+        accuracies, healthy_hits, fault_hits, healthy_hits_per_GP = evaluate(fault_unit)
+        print("")
+        print(name)
+        print(
+            "  Ensembles: "
+            + ", ".join(f"{acc:.1%}" for acc in accuracies)
+            + f" | healthy recall {np.mean(healthy_hits):.1%}, "
+            f"fault recall {np.mean(fault_hits):.1%}"
+        )
+        print(
+            "  Healthy recall per query gear: "
+            + ", ".join(
+                f"GP{GP} {np.mean(hits):.0%}" for GP, hits in healthy_hits_per_GP.items()
+            )
+        )
+        print(f"  Average accuracy: \033[92m{np.mean(accuracies):.4%}\033[0m")
 
-                        ensemble_distances = np.stack(ensemble_distances, axis=-1)
-                        # Combine ensemble members (soft or hard voting)
-                        acc = np.mean(vote(ensemble_distances) == targets)
-
-                        AGFD_accuracies.append(acc)
-                        print(
-                            f"{speed:<4} RPM, load {load:<2}: \033[95m{acc:>10.2%}\033[0m (installation {support_installation} -> {query_installation})"
-                        )
-                        print(
-                            "  ",
-                            ", ".join([
-                                f"{np.mean(np.argmin(ensemble_distances[:, :, i], axis=1) == targets):.1%}"
-                                for i in range(ENSEMBLE_SIZE)
-                            ]),
-                        )
-
-        print(f"AGFD average accuracy: \033[92m{np.mean(AGFD_accuracies):.4%}\033[0m")
-        all_accuracies.append(np.mean(AGFD_accuracies))
-    print(f"All accuracies: {np.mean(all_accuracies):.4%}")
-
-    # Average accuracy of each ensemble
-    return all_accuracies
+    # Average accuracy of each ensemble (main task)
+    return accuracies
 
 
 # MAIN
@@ -1316,6 +1099,11 @@ def parse_args():
         choices=list(RUNNERS),
         help="Dataset to test with.",
     )
+    parser.add_argument(
+        "--all-sensors",
+        action="store_true",
+        help="Let all sensors of the dataset vote instead of only the training sensor.",
+    )
     return parser.parse_args()
 
 
@@ -1323,7 +1111,7 @@ def evaluate(weight_dir, dataset):
     """Test the ensembles in `weight_dir` on `dataset`, returns each ensemble's accuracy."""
     if VOTING_TYPE not in ("soft", "hard"):
         raise ValueError(f"Unknown VOTING_TYPE '{VOTING_TYPE}', use 'soft' or 'hard'")
-    print(f"Voting: {VOTING_TYPE}")
+    print(f"Voting: {VOTING_TYPE}, sensors: AGFD {AGFD_SENSORS}, MCC5 {MCC5_SENSORS}")
 
     check_checkpoint_available(weight_dir)
     apply_training_config(weight_dir)
@@ -1341,6 +1129,8 @@ def main():
     if not weight_dir.is_dir():
         raise SystemExit(f"Weight directory not found: {weight_dir}")
 
+    if args.all_sensors:
+        use_all_sensors()
     evaluate(weight_dir, args.dataset)
 
 

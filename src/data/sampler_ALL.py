@@ -3,11 +3,9 @@ import logging
 from functools import partial
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 from torch.utils.data import BatchSampler, DataLoader, Dataset
 
-from src.data.sampler_ASD import ASD_Dataset
 from src.data.preprocessing_batch import BatchPreprocessor, collate_all
 from src.data.preprocessing_individual import IndividualPreprocessor
 from src.data.sampler_AGFD import AGFD_Dataset
@@ -16,17 +14,31 @@ from src.data.sampler_UNSW import UNSW_Dataset
 
 log = logging.getLogger("gear-cm")
 
+DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+
+# The only severity of missing tooth in MCC5-THU
+MCC5_MISSING_TOOTH_SEVERITY = "S"
+
+
+def MCC5_class_severities(config, config_prefix, class_):
+    """
+    Severities used for an MCC5 fault class: `<prefix>class_severities` can set them
+    per class, otherwise `<prefix>severities` applies. Missing tooth only has one.
+    """
+    if class_ == "missing_tooth":
+        return [MCC5_MISSING_TOOTH_SEVERITY]
+    return config.get(f"{config_prefix}class_severities", {}).get(
+        class_, config[f"{config_prefix}severities"]
+    )
+
 
 class ALL_Dataset(Dataset):
     NAME = "ALL"
 
-    def __init__(
-        self, dataset_AGFD, dataset_MCC5, dataset_UNSW, dataset_ASD, rng, config, device
-    ):
+    def __init__(self, dataset_AGFD, dataset_MCC5, dataset_UNSW, rng, config, device):
         self.dataset_AGFD = dataset_AGFD
         self.dataset_MCC5 = dataset_MCC5
         self.dataset_UNSW = dataset_UNSW
-        self.dataset_ASD = dataset_ASD
         self.rng = rng
         self.config = config
         self.device = device
@@ -38,8 +50,6 @@ class ALL_Dataset(Dataset):
             return self.dataset_MCC5[tuple(index[1:])]
         elif index[0] == "UNSW":
             return self.dataset_UNSW[tuple(index[1:])]
-        elif index[0] == "ASD":
-            return self.dataset_ASD[tuple(index[1:])]
         else:
             raise ValueError(f"Unknown dataset type: {index[0]}")
 
@@ -53,13 +63,11 @@ class ALL_BatchSampler(BatchSampler):
         self.config_prefix_AGFD = f"AGFD_{split}_"
         self.config_prefix_MCC5 = f"MCC5_{split}_"
         self.config_prefix_UNSW = f"UNSW_{split}_"
-        self.config_prefix_ASD = f"ASD_{split}_"
         self.config_prefix_ALL = f"ALL_{split}_"
 
         self.AGFD_included = self.dataset.dataset_AGFD is not None
         self.MCC5_included = self.dataset.dataset_MCC5 is not None
         self.UNSW_included = self.dataset.dataset_UNSW is not None
-        self.ASD_included = self.dataset.dataset_ASD is not None
 
         if self.AGFD_included:
             self.AGFD_options = list(
@@ -111,22 +119,39 @@ class ALL_BatchSampler(BatchSampler):
             ]
             print(f"Batch options UNSW: {len(self.UNSW_options)}")  # 12
 
-        if self.ASD_included:
-            self.ASD_options = list(
-                itertools.product(
-                    self.config[f"{self.config_prefix_ASD}speeds"],
-                    self.config[f"{self.config_prefix_ASD}loads"],
-                    self.config[f"{self.config_prefix_ASD}sensors"],
-                )
+    def num_query_groups(self, config_prefix, class_):
+        """
+        Number of query groups (installations, severities or healthy gears) of
+        `num_queries` samples for a class in one option.
+
+        With `balance_healthy_like`, classes labelled like healthy (e.g. wear used as
+        extra healthy units) take one of healthy's groups each instead of adding
+        their own, so every label has the same number of samples in a batch.
+        """
+        num_groups = self.config[f"{self.config_prefix_ALL}num_installations"]
+        if not self.config.get("balance_healthy_like", False):
+            return num_groups
+
+        healthy_label = self.config["class_map"]["healthy"]
+        healthy_like = [
+            c
+            for c in self.config[f"{config_prefix}classes"]
+            if c != "healthy" and self.config["class_map"][c] == healthy_label
+        ]
+        if class_ in healthy_like:
+            return 1
+        if class_ == "healthy":
+            assert len(healthy_like) < num_groups, (
+                f"Need more than {len(healthy_like)} query groups to balance healthy-like classes"
             )
-            print(f"Batch options ASD: {len(self.ASD_options)}")  # 4
+            return num_groups - len(healthy_like)
+        return num_groups
 
     def __iter__(self):
         while True:
             batch_options_AGFD = None
             batch_options_MCC5 = None
             batch_options_UNSW = None
-            batch_options_ASD = None
 
             if self.AGFD_included:
                 batch_options_AGFD = self.rng.choice(
@@ -146,12 +171,6 @@ class ALL_BatchSampler(BatchSampler):
                     size=self.config[f"{self.config_prefix_ALL}num_options"],
                     replace=False,
                 )
-            if self.ASD_included:
-                batch_options_ASD = self.rng.choice(
-                    self.ASD_options,
-                    size=self.config[f"{self.config_prefix_ALL}num_options"],
-                    replace=True,  # ! ASD has only 4 options
-                )
 
             batch = []
 
@@ -159,7 +178,6 @@ class ALL_BatchSampler(BatchSampler):
             ##
 
             if self.UNSW_included:
-                # print("> UNSW")
                 for option in batch_options_UNSW:
                     group = []
                     speed, load = option
@@ -238,14 +256,8 @@ class ALL_BatchSampler(BatchSampler):
                                     ])
                     batch.extend(group)
 
-                # print("----")
-                # for r in batch:
-                #     print(r)
-                # print(len(batch))
-
                 # Keep datasets separate
                 if self.config["separate_dataset_batches"]:
-                    # print("> Yield UNSW")
                     yield batch
                     batch = []
 
@@ -253,7 +265,6 @@ class ALL_BatchSampler(BatchSampler):
             ##
 
             if self.AGFD_included:
-                # print("> AGFD")
                 for option in batch_options_AGFD:
                     group = []
                     speed, load, sensor = option
@@ -269,13 +280,10 @@ class ALL_BatchSampler(BatchSampler):
                             GPs = self.rng.choice(
                                 self.config[f"{self.config_prefix_AGFD}healthy_GPs"],
                                 size=self.config[f"{self.config_prefix_ALL}num_anchors"]
-                                # size=1  # XXX
-                                # size=3  # YYY
                                 + self.config[
                                     f"{self.config_prefix_ALL}num_installations"
                                 ],
                                 # ! High number of anchors may require replacement to be true
-                                # replace=False,  # XXX YYY
                                 replace=True,
                             )
 
@@ -292,8 +300,6 @@ class ALL_BatchSampler(BatchSampler):
                                     "-",
                                     0,
                                     GPs[i],
-                                    # GPs[0],  # XXX
-                                    # GPs[i % 3],  # YYY
                                     self.config[f"{self.config_prefix_AGFD}OT_method"],
                                     self.config[f"{self.config_prefix_AGFD}TSA_size"],
                                     sensor,
@@ -303,9 +309,7 @@ class ALL_BatchSampler(BatchSampler):
                             # NOTE: This is added to keep number of healthy samples in balance with
                             # the number of samples per faulty class.
                             for i in range(
-                                self.config[
-                                    f"{self.config_prefix_ALL}num_installations"
-                                ]
+                                self.num_query_groups(self.config_prefix_AGFD, "healthy")
                             ):
                                 for _ in range(
                                     self.config[f"{self.config_prefix_ALL}num_queries"]
@@ -321,8 +325,6 @@ class ALL_BatchSampler(BatchSampler):
                                             self.config[
                                                 f"{self.config_prefix_ALL}num_anchors"
                                             ]
-                                            # 1  # XXX
-                                            # 3  # YYY
                                             + i
                                         ],
                                         self.config[
@@ -338,9 +340,9 @@ class ALL_BatchSampler(BatchSampler):
                         else:
                             for installation in self.rng.choice(
                                 self.config[f"{self.config_prefix_AGFD}installations"],
-                                size=self.config[
-                                    f"{self.config_prefix_ALL}num_installations"
-                                ],
+                                size=self.num_query_groups(
+                                    self.config_prefix_AGFD, class_
+                                ),
                                 replace=False,
                             ):
                                 # NOTE: Necessary, because no installation 3 for acc2
@@ -372,124 +374,8 @@ class ALL_BatchSampler(BatchSampler):
                                     ])
                     batch.extend(group)
 
-                # print("----")
-                # for r in batch:
-                #     print(r)
-                # print(len(batch))
-
                 # Keep datasets separate
                 if self.config["separate_dataset_batches"]:
-                    # print("> Yield AGFD")
-                    yield batch
-                    batch = []
-
-            # ASD samples
-            ##
-
-            if self.ASD_included:
-                # print("> ASD")
-                for option in batch_options_ASD:
-                    group = []
-                    speed, load, sensor = option
-                    speed = int(speed)
-                    load = int(load)
-
-                    # ! Collatino only works with 2-3 classes atm
-                    rand_fault_classes = self.rng.choice(
-                        self.config[f"{self.config_prefix_ASD}classes"][1:],
-                        size=2,
-                        replace=False,
-                    )
-                    for class_ in ["healthy"] + list(rand_fault_classes):
-                        # HEALTHY
-                        ##
-
-                        if class_ == "healthy":
-                            # Get GPs for healthy anchors and samples
-                            GPs = self.rng.choice(
-                                self.config[f"{self.config_prefix_ASD}healthy_GPs"],
-                                size=self.config[f"{self.config_prefix_ALL}num_anchors"]
-                                + self.config[
-                                    f"{self.config_prefix_ALL}num_installations"
-                                ],
-                                # ! High number of anchors may require replacement to be true
-                                replace=True,
-                            )
-
-                            # Anchor
-                            for i in range(
-                                self.config[f"{self.config_prefix_ALL}num_anchors"]
-                            ):
-                                # idx: (class, speed, load, severity, healthy_GP, sensor)
-                                group.append((
-                                    "ASD",
-                                    "healthy",
-                                    speed,
-                                    load if GPs[i] != 10 else -1,
-                                    "-",
-                                    GPs[i],
-                                    sensor,
-                                ))
-
-                            # Query healthy
-                            # NOTE: This is added to keep number of healthy samples in balance with
-                            # the number of samples per faulty class.
-                            for i in range(
-                                self.config[
-                                    f"{self.config_prefix_ALL}num_installations"
-                                ]
-                            ):
-                                GP = GPs[
-                                    self.config[f"{self.config_prefix_ALL}num_anchors"]
-                                    + i
-                                ]
-
-                                for _ in range(
-                                    self.config[f"{self.config_prefix_ALL}num_queries"]
-                                ):
-                                    group.append((
-                                        "ASD",
-                                        "healthy",
-                                        speed,
-                                        load if GP != 10 else -1,
-                                        "-",
-                                        GP,
-                                        sensor,
-                                    ))
-                        # FAULTY
-                        ##
-                        else:
-                            for severity in self.rng.choice(
-                                self.config[f"{self.config_prefix_ASD}severities"],
-                                size=self.config[
-                                    f"{self.config_prefix_ALL}num_installations"
-                                ],
-                                replace=False,
-                            ):
-                                # idx: (class, speed, load, severity, installation, healthy_GP, OT_method, TSA_size, sensor)
-                                for _ in range(
-                                    self.config[f"{self.config_prefix_ALL}num_queries"]
-                                ):
-                                    group.append([
-                                        "ASD",
-                                        class_,
-                                        speed,
-                                        -1,  # No other loads
-                                        severity,
-                                        0,
-                                        sensor,
-                                    ])
-                    batch.extend(group)
-
-                # print("----")
-                # for r in batch:
-                #     print(r)
-                # print(len(batch))
-                # quit()
-
-                # Keep datasets separate
-                if self.config["separate_dataset_batches"]:
-                    # print("> Yield ASD")
                     yield batch
                     batch = []
 
@@ -497,7 +383,6 @@ class ALL_BatchSampler(BatchSampler):
             ##
 
             if self.MCC5_included:
-                # print("> MCC5")
                 for option in batch_options_MCC5:
                     group = []
                     speed, load, sensor, circulation = option
@@ -538,9 +423,7 @@ class ALL_BatchSampler(BatchSampler):
                             # NOTE: This is added to keep number of healthy samples in balance with
                             # the number of samples per faulty class.
                             for _ in range(
-                                self.config[
-                                    f"{self.config_prefix_ALL}num_installations"
-                                ]
+                                self.num_query_groups(self.config_prefix_MCC5, "healthy")
                             ):
                                 for _ in range(
                                     self.config[f"{self.config_prefix_ALL}num_queries"]
@@ -564,22 +447,17 @@ class ALL_BatchSampler(BatchSampler):
 
                         # FAULTY
                         else:
+                            # Missing tooth has only one severity, so it's repeated
+                            severities = MCC5_class_severities(
+                                self.config, self.config_prefix_MCC5, class_
+                            )
+                            num_groups = self.num_query_groups(
+                                self.config_prefix_MCC5, class_
+                            )
                             for severity in self.rng.choice(
-                                (
-                                    self.config[f"{self.config_prefix_MCC5}severities"]
-                                    if class_ == "crack"
-                                    else [
-                                        x
-                                        for x in self.config[
-                                            f"{self.config_prefix_MCC5}severities"
-                                        ]
-                                        if x != "XL"
-                                    ]
-                                ),
-                                size=self.config[
-                                    f"{self.config_prefix_ALL}num_installations"
-                                ],
-                                replace=False,
+                                severities,
+                                size=num_groups,
+                                replace=len(severities) < num_groups,
                             ):
                                 # idx: (class, speed, load, severity, circulation, OT_method, TSA_size, sensor)
                                 for _ in range(
@@ -602,22 +480,13 @@ class ALL_BatchSampler(BatchSampler):
                                     ])
                     batch.extend(group)
 
-                # print("----")
-                # for r in batch:
-                #     print(r)
-                # print(len(batch))
-
                 if self.config["separate_dataset_batches"]:
-                    # print("> Yield MCC5")
                     yield batch
                     batch = []
 
             if not self.config["separate_dataset_batches"]:
                 yield batch
                 batch = []
-
-    def __len__(self):
-        return len(self.indices)
 
 
 def get_ALL_data(
@@ -628,14 +497,14 @@ def get_ALL_data(
     AGFD_included=True,
     MCC5_included=True,
     UNSW_included=False,
-    ASD_included=False,
 ):
     """
-    Create a dataloader from AGFD & MCC5 (and possibly UNSW crack & wear) according to the given configuration.
+    Create a dataloader from the included datasets (UNSW, MCC5, AGFD), using the
+    `<dataset>_<split>_*` and `ALL_<split>_*` entries of the configuration.
 
     Parameters:
         split: str
-            "train", "validation", or "test".
+            "train" or "validation".
         rng: np.random.Generator
             Random number generator.
         config: dict
@@ -660,7 +529,6 @@ def get_ALL_data(
     log.debug("")
 
     config_prefix_AGFD = f"AGFD_{split}_"
-    config_prefix_ASD = f"ASD_{split}_"
     config_prefix_MCC5 = f"MCC5_{split}_"
     config_prefix_UNSW = f"UNSW_{split}_"
 
@@ -681,12 +549,11 @@ def get_ALL_data(
     ##
 
     if AGFD_included:
-        df_AGFD = pd.read_feather(
-            Path(__file__).resolve().parent.parent.parent
-            / "data"
-            # / "AGFD_V6.feather"  # XXX
-            / "AGFD_OT_V2.feather"
-        )
+        df_AGFD = pd.read_feather(DATA_DIR / config["data_files"]["AGFD"])
+
+        # Severe "crack" (Severe_TFF_GP5) is an entirely missing tooth
+        missing_tooth = (df_AGFD["class"] == "crack") & (df_AGFD["severity"] == "L")
+        df_AGFD.loc[missing_tooth, "class"] = "missing_tooth"
 
         df_AGFD = df_AGFD[
             df_AGFD["speed"].isin(config[f"{config_prefix_AGFD}speeds"])
@@ -711,56 +578,28 @@ def get_ALL_data(
             & (df_AGFD["OT_method"] == config[f"{config_prefix_AGFD}OT_method"])
         ]
 
-        # print(f"AGFD data shape: {df_AGFD.shape}")
-
-    # ASD
-    ##
-
-    if ASD_included:
-        df_ASD = pd.read_feather(
-            Path(__file__).resolve().parent.parent.parent
-            / "data"
-            / "ASD_OT_COMB_V1.feather"
-        )
-
-        df_ASD = df_ASD[
-            df_ASD["speed"].isin(config[f"{config_prefix_ASD}speeds"])
-            & (
-                (df_ASD["severity"].isin(config[f"{config_prefix_ASD}severities"]))
-                | (df_ASD["severity"] == "-")
-            )
-            & (
-                (df_ASD["healthy_GP"].isin(config[f"{config_prefix_ASD}healthy_GPs"]))
-                | (df_ASD["healthy_GP"] == 0)
-            )
-            & (df_ASD["class"].isin(config[f"{config_prefix_ASD}classes"]))
-        ]
-
-        # print(f"ASD data shape: {df_ASD.shape}")
-        # quit()
-
     # MCC5
     ##
 
     if MCC5_included:
-        df_MCC5 = pd.read_feather(
-            Path(__file__).resolve().parent.parent.parent
-            / "data"
-            / "MCC5-THU_OT_V3.feather"
-            # / "MCC5_V6.feather"  # XXX
-        )
-
-        missing_tooth = df_MCC5["class"] == "missing_tooth"
-        df_MCC5.loc[missing_tooth, "class"] = "crack"
-        df_MCC5.loc[missing_tooth, "severity"] = "XL"
+        df_MCC5 = pd.read_feather(DATA_DIR / config["data_files"]["MCC5"])
 
         df_MCC5 = df_MCC5[
             df_MCC5["speed"].isin(config[f"{config_prefix_MCC5}speeds"])
             & (df_MCC5["load"].isin(config[f"{config_prefix_MCC5}loads"]))
             & (df_MCC5["class"].isin(config[f"{config_prefix_MCC5}classes"]))
             & (
-                (df_MCC5["severity"].isin(config[f"{config_prefix_MCC5}severities"]))
-                | (df_MCC5["severity"] == "-")
+                (df_MCC5["severity"] == "-")
+                | pd.Series(
+                    [
+                        severity
+                        in MCC5_class_severities(config, config_prefix_MCC5, class_)
+                        for class_, severity in zip(
+                            df_MCC5["class"], df_MCC5["severity"]
+                        )
+                    ],
+                    index=df_MCC5.index,
+                )
             )
             & (df_MCC5["OT_method"] == config[f"{config_prefix_MCC5}OT_method"])
         ]
@@ -768,12 +607,7 @@ def get_ALL_data(
     # UNSW
     ##
     if UNSW_included:
-        df_UNSW = pd.read_feather(
-            Path(__file__).resolve().parent.parent.parent
-            / "data"
-            / "UNSW_gear_crack_OT_V2.feather"
-            # / "UNSW_V6.feather"  # XXX
-        )
+        df_UNSW = pd.read_feather(DATA_DIR / config["data_files"]["UNSW"])
 
         df_UNSW = df_UNSW[
             df_UNSW["speed"].isin(config[f"{config_prefix_UNSW}speeds"])
@@ -829,23 +663,9 @@ def get_ALL_data(
     else:
         dataset_UNSW = None
 
-    if ASD_included:
-        dataset_ASD = ASD_Dataset(
-            df_ASD,
-            IndividualPreprocessor(config, "ASD", split),
-            rng,
-            config_prefix_ASD,
-            config,
-            device,
-        )
-    else:
-        dataset_ASD = None
-
     # Combined dataset
 
-    dataset = ALL_Dataset(
-        dataset_AGFD, dataset_MCC5, dataset_UNSW, dataset_ASD, rng, config, device
-    )
+    dataset = ALL_Dataset(dataset_AGFD, dataset_MCC5, dataset_UNSW, rng, config, device)
 
     # DATALOADER
     #############
@@ -861,9 +681,6 @@ def get_ALL_data(
             config=config,
             device=device,
         ),
-        # pin_memory=True,
-        # num_workers=0,
-        # prefetch_factor=4,
     )
 
     log.debug("")

@@ -86,7 +86,7 @@ class IndividualPreprocessor:
             else:
                 raise ValueError(  # noqa: TRY004
                     f"Unknown batch preprocessing step '{func_name}' in "
-                    f"config['{self.stage}']!"
+                    "config['preprocessing_individual']!"
                 )
 
         return samples

@@ -31,7 +31,6 @@ class CustomFormatter(logging.Formatter):
 def setup_logging(log_to_file=False):
     # Create a logger
     logger = logging.getLogger("gear-cm")
-    # logger = logging.getLogger("Gear-CM logger")
     logger.setLevel(logging.DEBUG)
 
     # logging.getLogger() returns the same logger object on every call, so
@@ -40,13 +39,9 @@ def setup_logging(log_to_file=False):
     # keep stacking handlers and duplicate every log line once per call.
     logger.handlers.clear()
 
-    # Create a formatter to define the log format
-
     # Create a stream handler to print logs to the console
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.DEBUG)
-    # formatter = logging.Formatter("%(asctime)s   %(message)s", "%H:%M:%S")
-    # console_handler.setFormatter(formatter)
     console_handler.setFormatter(CustomFormatter())
     logger.addHandler(console_handler)
 
@@ -61,10 +56,6 @@ def setup_logging(log_to_file=False):
             log_dir / "runs.log", when="midnight", interval=1, backupCount=7
         )
         file_handler.setLevel(logging.INFO)
-        # formatter = logging.Formatter(
-        #     "%(asctime)s - %(levelname)s   %(message)s", "%Y-%m-%d %H:%M:%S"
-        # )
-        # file_handler.setFormatter(formatter)
         file_handler.setFormatter(CustomFormatter())
         logger.addHandler(file_handler)
 

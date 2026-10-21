@@ -10,7 +10,7 @@ from src.utils.logging import setup_logging
 MODEL_WEIGHT_DIR = Path(__file__).resolve().parent / "model_weights"
 
 # Letter used for each dataset in the output directory name, in the order they appear there
-DATASET_CODES = {"UNSW": "U", "MCC5": "M", "AGFD": "A", "ASD": "S"}
+DATASET_CODES = {"UNSW": "U", "MCC5": "M", "AGFD": "A"}
 
 
 def get_dataset_code(train_datasets):
@@ -29,14 +29,20 @@ def get_dataset_code(train_datasets):
 
 
 def get_output_dir(dataset_code):
-    """First free directory out of <code>, <code>_1, <code>_2, ..."""
+    """
+    Create and return the first free directory out of <code>, <code>_1, <code>_2, ...
+    Creating it right away (atomically) keeps parallel runs from picking the same one.
+    """
+    MODEL_WEIGHT_DIR.mkdir(parents=True, exist_ok=True)
     output_dir = MODEL_WEIGHT_DIR / dataset_code
     suffix = 1
-    while output_dir.exists():
-        output_dir = MODEL_WEIGHT_DIR / f"{dataset_code}_{suffix}"
-        suffix += 1
-
-    return output_dir
+    while True:
+        try:
+            output_dir.mkdir()
+            return output_dir
+        except FileExistsError:
+            output_dir = MODEL_WEIGHT_DIR / f"{dataset_code}_{suffix}"
+            suffix += 1
 
 
 def train_ensemble(config, runs, seed, device, log):
@@ -74,14 +80,13 @@ def train_ensemble(config, runs, seed, device, log):
         log.info("")
 
         # Fresh data loaders for every run
-        train_loaders, validation_loader, test_loader = setup_data(
+        train_loaders, validation_loader = setup_data(
             config, device, seed=run_seed
         )
 
         run_single_training(
             train_loaders,
             validation_loader,
-            test_loader,
             config,
             device,
             model_weight_dir=output_dir,
@@ -102,7 +107,10 @@ def parse_args():
         "config", help="Config name in configs/, without .yaml (e.g. FINAL)."
     )
     parser.add_argument(
-        "--runs", type=int, default=5, help="Number of training runs (default: 5)."
+        "--runs",
+        type=int,
+        default=9,
+        help="Number of training runs (default: 9, three ensembles of three).",
     )
     parser.add_argument(
         "--seed",

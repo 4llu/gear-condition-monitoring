@@ -2,143 +2,65 @@ import logging
 
 import numpy as np
 
-from src.data.sampler_AGFD import get_AGFD_data
 from src.data.sampler_ALL import get_ALL_data
-from src.data.sampler_MCC5 import get_MCC5_data
-from src.data.sampler_UNSW import get_UNSW_data
 
 log = logging.getLogger("gear-cm")
 
+DATASET_LETTERS = {"U": "UNSW", "M": "MCC5", "A": "AGFD"}
+
 
 def get_dataloader(name, split, rng, config, device):
-    if name == "UNSW":
-        return get_UNSW_data(split, rng, config, device)
-    elif name == "AGFD":
-        return get_AGFD_data(split, rng, config, device)
-    elif name == "MCC5":
-        return get_MCC5_data(split, rng, config, device)
-    # ALL -> final configuration
-    elif "ALL_" in name:
-        incl_data = name.split("_")[1]
-        return get_ALL_data(
-            split,
-            rng,
-            config,
-            device,
-            UNSW_included="U" in incl_data,
-            MCC5_included="M" in incl_data,
-            AGFD_included="A" in incl_data,
-            ASD_included="S" in incl_data,
-        )
-    # elif name == "ALL_UMA":
-    #     return get_ALL_data(
-    #         split,
-    #         rng,
-    #         config,
-    #         device,
-    #         UNSW_included=True,
-    #         MCC5_included=True,
-    #         AGFD_included=True,
-    #     )
-    # elif name == "ALL_MA":
-    #     return get_ALL_data(
-    #         split,
-    #         rng,
-    #         config,
-    #         device,
-    #         UNSW_included=False,
-    #         MCC5_included=True,
-    #         AGFD_included=True,
-    #     )
-    # elif name == "ALL_UA":
-    #     return get_ALL_data(
-    #         split,
-    #         rng,
-    #         config,
-    #         device,
-    #         UNSW_included=True,
-    #         MCC5_included=False,
-    #         AGFD_included=True,
-    #     )
-    # elif name == "ALL_UM":
-    #     return get_ALL_data(
-    #         split,
-    #         rng,
-    #         config,
-    #         device,
-    #         UNSW_included=True,
-    #         MCC5_included=True,
-    #         AGFD_included=False,
-    #     )
-    # elif name == "ALL_U":
-    #     return get_ALL_data(
-    #         split,
-    #         rng,
-    #         config,
-    #         device,
-    #         UNSW_included=True,
-    #         MCC5_included=False,
-    #         AGFD_included=False,
-    #     )
-    # elif name == "ALL_M":
-    #     return get_ALL_data(
-    #         split,
-    #         rng,
-    #         config,
-    #         device,
-    #         UNSW_included=False,
-    #         MCC5_included=True,
-    #         AGFD_included=False,
-    #     )
-    # elif name == "ALL_A":
-    #     return get_ALL_data(
-    #         split,
-    #         rng,
-    #         config,
-    #         device,
-    #         UNSW_included=False,
-    #         MCC5_included=False,
-    #         AGFD_included=True,
-    #     )
-    # OLD
-    # elif name == "ALL":
-    #     return get_ALL_data(split, rng, config, device, UNSW_included=False)
-    # elif name == "ALL+UNSW":
-    #     return get_ALL_data(split, rng, config, device, UNSW_included=True)
-    # elif name == "ALL-AGFD":
-    #     return get_ALL_data(split, rng, config, device, AGFD_included=False)
-    # elif name == "ALL-MCC5":
-    #     return get_ALL_data(split, rng, config, device, MCC5_included=False)
-    else:
-        s = f"No such data configuration as '{name}'!"
+    """
+    Dataloader for `ALL_<letters>`, e.g. `ALL_UM` for UNSW + MCC5 (U: UNSW, M: MCC5,
+    A: AGFD). The `<dataset>_<split>_*` entries of the config define each dataset.
+    """
+    if not name.startswith("ALL_") or not set(name[4:]) <= set(DATASET_LETTERS):
+        s = f"No such data configuration as '{name}', use ALL_<letters> with {list(DATASET_LETTERS)}"
         log.error(s)
-        raise Exception(s)
+        raise ValueError(s)
+
+    letters = name[4:]
+    return get_ALL_data(
+        split,
+        rng,
+        config,
+        device,
+        UNSW_included="U" in letters,
+        MCC5_included="M" in letters,
+        AGFD_included="A" in letters,
+    )
 
 
 def setup_data(config, device, seed=None):
+    """
+    Training loaders for every entry of `train_datasets` and one validation loader for
+    `validation_datasets` (None if the list is empty or missing).
+
+    Validation draws from its own generator, so the validation setup doesn't change the
+    training samples or augmentations of a seed.
+    """
     log.debug("")
     log.debug("PREPARING DATA")
 
-    # Every sampler and augmentation draws from this generator
-    rng = np.random.default_rng(seed)
+    train_rng = np.random.default_rng(seed)
+    validation_rng = np.random.default_rng(None if seed is None else [seed, 1])
 
-    train_loaders = []
-    validation_loaders = []
-    test_loaders = []
+    train_loaders = [
+        iter(get_dataloader(name, "train", train_rng, config, device))
+        for name in config["train_datasets"]
+    ]
 
-    for dataset_name in config["train_datasets"]:
-        train_loaders.append(
-            iter(get_dataloader(dataset_name, "train", rng, config, device))
-        )
-    for dataset_name in config["validation_datasets"]:
-        validation_loaders.append(
-            iter(get_dataloader(dataset_name, "validation", rng, config, device))
-        )
-    for dataset_name in config["test_datasets"]:
-        test_loaders.append(
-            iter(get_dataloader(dataset_name, "test", rng, config, device))
+    validation_datasets = config.get("validation_datasets") or []
+    if len(validation_datasets) > 1:
+        raise ValueError("Only one validation dataset is supported")
+    validation_loader = None
+    if validation_datasets:
+        validation_loader = iter(
+            get_dataloader(
+                validation_datasets[0], "validation", validation_rng, config, device
+            )
         )
 
     log.debug("PREPARING DATA DONE")
 
-    return train_loaders, validation_loaders[0], test_loaders[0]
+    return train_loaders, validation_loader

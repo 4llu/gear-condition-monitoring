@@ -1,94 +1,77 @@
 #? Creation
 name: FINAL
-log: false
-save: true # FIXME
+log: false # TensorBoard logging to logs/TB_logs
+save: true # train_repeated.py and results.py always save
 seed: null # * null -> random seed (still saved in run_info.yaml), --seed overrides
 
-#? Validation and testing
+#? Validation (monitoring only, no checkpoint is selected with it)
 validation_interval: 250 # * In batches
-# validation_batches: 50
-validation_batches: 5 # FOR RESULTS
-test_interval: 250
-test_batches: 5 # FOR RESULTS
-# test_batches: 50 
-test_extra_logging_interval: 0
+validation_batches: 5
 
 #? Datasets
+# Feather files in data/ (old versions: AGFD_OT_V2, MCC5-THU_OT_V3, UNSW_gear_crack_OT_V2)
+data_files:
+    AGFD: AGFD_V6.feather
+    MCC5: MCC5_V6.feather
+    UNSW: UNSW_V6.feather
 train_datasets: [ALL_MA]
-validation_datasets: [UNSW]
-test_datasets: [ALL_U]
+validation_datasets: [ALL_U] # ALL_<letters>, uses the <dataset>_validation_* entries below
 
 #? Teeth
 UNSW_train_teeth: 27
-UNSW_test_teeth: 27
 UNSW_validation_teeth: 27
 AGFD_train_teeth: 15
 AGFD_validation_teeth: 15
-AGFD_test_teeth: 15
-ASD_train_teeth: 15
-ASD_validation_teeth: 15
-ASD_test_teeth: 15
 MCC5_train_teeth: 36
 MCC5_validation_teeth: 36
-MCC5_test_teeth: 36
 
+# "healthy" means no localized tooth fault. Wear units whose signature doesn't align
+# with a local fault (AGFD L, MCC5 S) are used as extra healthy units, because MCC5 has
+# one healthy unit and UNSW two healthy-labelled gears (H and mild crack S)
+# (see results/local_fault/LOG.md)
 class_map:
     healthy: 0
     crack: 1
-    wear: 2
-    # pitting: 3
-    # missing_tooth: 4
+    missing_tooth: 2
+    wear: 0
 
 use_difference: true
-episodic_training: false
-average_over_anchors: true # Only works for non-episodic training
-
-# Only for validation and testing when using non-episodic training
-k_shot: 10
-n_query: 10
-
-#* ALL [TRAIN]
-separate_dataset_batches: true # Only works for non-episodic training
+average_over_anchors: true
+separate_dataset_batches: true # Each batch comes from one dataset
 
 # TRAIN
 ALL_train_num_options: 5
-ALL_train_num_anchors: 20
+ALL_train_num_anchors: 10 # Close to the test anchor sizes (MCC5 7 windows); fixed the MCC5 drop with the ~20-window UNSW file, no clear difference to 20 with ~80 windows
 ALL_train_num_queries: 5
 ALL_train_num_installations: 2
 
-# TEST
-ALL_test_num_options: 5
-ALL_test_num_anchors: 20
-ALL_test_num_queries: 5
-ALL_test_num_installations: 2
+# VALIDATION
+ALL_validation_num_options: 5
+ALL_validation_num_anchors: 10 # Same as training
+ALL_validation_num_queries: 5
+ALL_validation_num_installations: 2
 
 #* UNSW [ALL]
 ##
 
 UNSW_train_OT_method: signal
-# UNSW_train_OT_method: nico # XXX
 UNSW_train_TSA_size: 40
 
 UNSW_train_speeds: [5, 10, 15, 20]
-# UNSW_train_speeds: [5, 15, 20] # FIXME
 UNSW_train_loads: [5, 10, 15, 20]
-# UNSW_train_loads: [5, 10] # FIXME
-# UNSW_train_excluded_conditions: [[10, 5]] # [speed, load] pairs left out of training (ALL_* only)
-UNSW_train_excluded_conditions: []
+UNSW_train_excluded_conditions: [] # [speed, load] pairs left out of training
 UNSW_train_classes: [healthy, crack]
 UNSW_train_severities: [H, S, M, L]
 
-#* UNSW [ALL] (TEST)
+#* UNSW [ALL] (VALIDATION)
 ##
 
-UNSW_test_OT_method: signal
-# UNSW_test_OT_method: nico # XXX
-UNSW_test_TSA_size: 40
-
-UNSW_test_speeds: [5, 10, 15, 20]
-UNSW_test_loads: [5, 10, 15, 20]
-UNSW_test_classes: [healthy, crack]
-UNSW_test_severities: [H, S, M, L]
+UNSW_validation_OT_method: signal
+UNSW_validation_TSA_size: 40
+UNSW_validation_speeds: [5, 10, 15, 20]
+UNSW_validation_loads: [5, 10, 15, 20]
+UNSW_validation_classes: [healthy, crack]
+UNSW_validation_severities: [H, S, M, L]
 
 #* MCC5-THU [ALL]
 ##
@@ -97,25 +80,26 @@ MCC5_train_OT_method: signal
 MCC5_train_TSA_size: 30
 
 MCC5_train_sensors: [gearbox_vibration_x]
-# MCC5_train_sensors: [gearbox_vibration_x, gearbox_vibration_y]
 MCC5_train_speeds: [1000, 1500, 2000, 2500, 3000]
 MCC5_train_loads: [5, 10, 15, 20]
-MCC5_train_classes: [healthy, crack, wear]
-MCC5_train_severities: [M, L]
-# MCC5_train_severities: [M, L, XL]
+MCC5_train_classes: [healthy, crack, missing_tooth, wear]
+MCC5_train_severities: [M, L] # Default for fault classes, missing tooth has a single severity
+# MCC5 wear M and L align with missing tooth (cos 0.69 and 0.86), so only S is used
+MCC5_train_class_severities:
+    wear: [S]
 
-#* MCC5-THU [ALL] [TEST]
+#* MCC5-THU [ALL] (VALIDATION)
 ##
 
-MCC5_test_OT_method: signal
-MCC5_test_TSA_size: 30
-
-MCC5_test_sensors: [gearbox_vibration_x]
-# MCC5_test_sensors: [gearbox_vibration_x, gearbox_vibration_y]
-MCC5_test_speeds: [1000, 1500, 2000, 2500, 3000]
-MCC5_test_loads: [5, 10, 15, 20]
-MCC5_test_classes: [healthy, crack, wear]
-MCC5_test_severities: [M, L]
+MCC5_validation_OT_method: signal
+MCC5_validation_TSA_size: 30
+MCC5_validation_sensors: [gearbox_vibration_x]
+MCC5_validation_speeds: [1000, 1500, 2000, 2500, 3000]
+MCC5_validation_loads: [5, 10, 15, 20]
+MCC5_validation_classes: [healthy, crack, missing_tooth, wear]
+MCC5_validation_severities: [M, L]
+MCC5_validation_class_severities:
+    wear: [S]
 
 #* AGFD [ALL]
 ##
@@ -125,89 +109,31 @@ AGFD_train_TSA_size: 40
 
 AGFD_train_sensors: [acc4]
 AGFD_train_speeds: [500, 750, 1000, 1250, 1500]
-# AGFD_train_speeds: [500, 750, 1000, 1250] # FIXME
 AGFD_train_loads: [1, 6, 11]
 AGFD_train_installations: [1, 2, 3]
-AGFD_train_healthy_GPs: [2, 3, 4, 5, 6, 9] # 1 & 7 not good, 8 doesn't exist # XXX: Drop 2 and 6?
-AGFD_train_classes: [healthy, crack, wear]
+AGFD_train_healthy_GPs: [1, 2, 3, 4, 5, 6, 7, 9] # All healthy gears (8 does not exist)
+# Severe "crack" (L) is a missing tooth and is relabelled as such when loading, so
+# crack is mild crack (S) only. Wear is severe wear (L) only, as mild wear (GP7)
+# aligns with crack and missing tooth (cos 0.67 and 0.62)
+AGFD_train_classes: [healthy, crack, missing_tooth, wear]
 AGFD_train_severities: [S, L]
-AGFD_train_include_large_crack: true
-# AGFD_train_include_large_crack: false
+AGFD_train_include_large_crack: false
 AGFD_train_include_small_wear: false
 
-#* AGFD [ALL] (TEST)
+#* AGFD [ALL] (VALIDATION)
 ##
 
-AGFD_test_OT_method: signal
-AGFD_test_TSA_size: 40
-
-AGFD_test_sensors: [acc4]
-AGFD_test_speeds: [500, 750, 1000, 1250, 1500] # Skip 250 # XXX: ADd 1500
-AGFD_test_loads: [1, 6, 11]
-AGFD_test_installations: [1, 2, 3]
-AGFD_test_healthy_GPs: [2, 3, 4, 5, 6, 9]
-AGFD_test_classes: [healthy, crack, wear]
-AGFD_test_severities: [S, L]
-AGFD_test_include_large_crack: false
-AGFD_test_include_small_wear: false
-
-#* ASD [ALL]
-##
-
-ASD_train_OT_method: signal # Unused (only option in ASD)
-ASD_train_TSA_size: 45 # Unused (only option in ASD)
-
-ASD_train_sensors: [acc4]
-ASD_train_speeds: [500, 750, 1000, 1250] # Skip 250
-ASD_train_loads: [1, 6, 11]
-ASD_train_installations: [1, 2, 3]
-ASD_train_healthy_GPs: [1, 4, 5, 7, 10]
-ASD_train_classes: [healthy, 1-shim, 2-shim, 3-shim]
-ASD_train_severities: [S, M, L]
-
-
-#* UNSW VALIDATION
-##
-
-UNSW_validation_shift_methods: [load]
-
-UNSW_validation_OT_methods: [signal]
-UNSW_validation_TSA_sizes: [40]
-UNSW_validation_speeds: [5, 10, 15, 20]
-UNSW_validation_loads: [5, 10, 15]
-UNSW_validation_classes: [healthy, crack]
-UNSW_validation_severities: [H, S, M, L]
-
-#* UNSW TEST
-##
-
-# UNSW_test_shift_methods: [load_and_severity]
-
-# UNSW_test_OT_methods: [signal]
-# UNSW_test_TSA_sizes: [40]
-# UNSW_test_speeds: [5, 10, 15, 20]
-# UNSW_test_loads: [5, 10, 15]
-# UNSW_test_classes: [healthy, crack]
-# UNSW_test_severities: [H, S, M, L]
-
-# #* AGFD TEST
-# ##
-
-# AGFD_test_OT_method: signal
-# AGFD_test_TSA_size: 40
-# AGFD_test_shift_methods: [load]
-# # AGFD_test_shift_methods: [load_and_installation]
-
-# AGFD_test_sensors: [acc4]
-# AGFD_test_speeds: [500, 750, 1000, 1250, 1500] # Skip 250 # XXX: ADd 1500
-# AGFD_test_loads: [1, 6, 11]
-# AGFD_test_installations: [1, 2, 3]
-# AGFD_test_healthy_GPs: [2, 3, 4, 5, 6, 9] # 1 & 7 not good, 8 doesn't exist # XXX: Drop 2 and 6
-# # AGFD_test_healthy_GPs: [2, 3, 4, 5, 6, 9] # 1 & 7 not good, 8 doesn't exist
-# AGFD_test_classes: [healthy, crack, wear]
-# AGFD_test_severities: [S, L]
-# AGFD_test_include_large_crack: false
-# AGFD_test_include_small_wear: false
+AGFD_validation_OT_method: signal
+AGFD_validation_TSA_size: 40
+AGFD_validation_sensors: [acc4]
+AGFD_validation_speeds: [500, 750, 1000, 1250, 1500]
+AGFD_validation_loads: [1, 6, 11]
+AGFD_validation_installations: [1, 2, 3]
+AGFD_validation_healthy_GPs: [1, 2, 3, 4, 5, 6, 7, 9]
+AGFD_validation_classes: [healthy, crack, missing_tooth, wear]
+AGFD_validation_severities: [S, L]
+AGFD_validation_include_large_crack: false
+AGFD_validation_include_small_wear: false
 
 #? Preprocessing
 # * Order matters
@@ -215,17 +141,21 @@ UNSW_validation_severities: [H, S, M, L]
 preprocessing_individual: [cherry_pick_indices]
 preprocessing_batch: [amplitude_log10]
 preprocessing_difference_batch: [
-        # permutate_blocks,
         mask_blocks_non_episodic,
-        # permute_within_blocks,
         augment_amplitude,
     ]
 
 #? Preprocessing additional arguments
 num_blocks_to_mask: 1 # Only `mask_blocks_non_episodic`
+# Only used if add_unit_variation is in preprocessing_difference_batch. Meant for
+# training data without variation between healthy units (UNSW + MCC5), see
+# results/local_fault/LOG.md. Size from MCC5 (run-to-run 0.11-0.30, near-healthy
+# units ~0.23-0.30), not from AGFD
+unit_variation_type: white
+unit_variation_rms: 0.25
 amplitude_augment_low: 0.8
 amplitude_augment_high: 1.2
-# Frequency cherry picking
+# Bin selection: 8 mesh harmonics, 5 nearest and 5 furthest sidebands per side
 gear_harmonics_to_include: 8
 gear_sideband_block_size: 5
 
@@ -239,52 +169,29 @@ loss_args:
     miner: True
     miner_type: all
 similarity: euclidean
-# lpnorm_embeddings_training: false
 lpnorm_embeddings_training: true
 center_embeddings_inference: false
 lpnorm_embeddings_inference: false
-# lpnorm_embeddings_inference: true
-
-# ? Remember to set intermediate_L2 to True in the model_args
-# loss: supcon
-# loss_args:
-#     # temperature: 0.02
-#     temperature: 0.1 # Canonical
-# similarity: cosine # Default: cosine
-# lpnorm_embeddings_training: True # Does nothing with similarity=cosine, but cosine similarity does normalization implicitly
-# center_embeddings_inference: False # Don't use this with cosine similarity, as it will break the embeddings
-# lpnorm_embeddings_inference: True # Does nothing with similarity=cosine, but cosine similarity does normalization implicitly
 
 embedding_len: 2
-backbone: MlpMixer
+backbone: MlpMixer # Or MLP, with model_args hidden_sizes: [...] (input_size defaults to the selected bins)
 model_args:
-    # intermediate_L2: True # SupCon
-    intermediate_L2: False # Triplet
     num_layers: 3
     hidden_dim: 32
     tokens_mlp_dim: 16
     channels_mlp_dim: 64
-    # hidden_dim: 21
-    # tokens_mlp_dim: 16
-    # channels_mlp_dim: 42
 
 # ? Training
 
-episodes_per_dataset_per_batch: 2 # FIXME: Automatically use number of datasets in training
-# max_batches: 501 # CANONICAL
-max_batches: 1001
-warmup_batches: 100 # CANONICAL
-# warmup_batches: 10
-# warmup_batches: 0
-lr: 0.001 # CANONICAL
-# sch_gamma: 0.999 # XXX
+episodes_per_dataset_per_batch: 2 # Episodes from every training dataset per batch
+max_batches: 501 # Checkpoint 5 (batch 500) is used
+warmup_batches: 100
+lr: 0.001
 sch_gamma: 0.998
 momentum: 0.9
 b2: 0.999
-gradient_clip: 0 # XXX
-# gradient_clip: 1.0
+gradient_clip: 0
 
 # Regularization
 weight_decay: 0.0001
 dropout: 0.5
-# dropout: 0.3
