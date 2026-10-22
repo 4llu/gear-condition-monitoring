@@ -1,7 +1,10 @@
-.DS_STore
+.DS_Store
 **/__pycache__/
+*.pyc
 
 data/*
 data/processed/*
 logs/
 model_weights/*
+
+*.log
