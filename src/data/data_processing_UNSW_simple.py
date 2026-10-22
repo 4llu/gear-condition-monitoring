@@ -70,9 +70,6 @@ DATA_FOLDER = (
 )
 OUTPUT_FILE = Path(__file__).parent.parent.parent.resolve() / "data" / "UNSW_V6.feather"
 
-print(OUTPUT_FILE)
-quit()
-
 
 COLUMNS = ["speed", "load", "severity", "OT_method", "signal", "freqs"]
 
